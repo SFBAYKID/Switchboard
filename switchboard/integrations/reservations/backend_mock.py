@@ -22,13 +22,18 @@ These knobs are mock-only config, NOT part of the public API contract. Mock mode
 additionally refused in production unless an explicit flag is set (see core.config) —
 review #7 "impossible to use in production without an explicit flag."
 
-Determinism: confirmation ids are a pure function of the request (and of
-`idempotency_key` when provided), so tests are stable AND a retried `book` with the
-same key returns the SAME confirmation_id (idempotent — no double-booking, review
-#5). No randomness, no clock reads, no persisted state (stateless, like the real
+Determinism: a booking's confirmation id is a pure function of (tenant,
+idempotency_key), so tests are stable AND a retried `book` with the same key returns
+the SAME confirmation_id (idempotent — no double-booking, review #5). The key is
+REQUIRED (enforced by the request model), so there is no content-hash fallback that
+could collide two genuinely distinct bookings into one (false) confirmation. No
+randomness, no clock reads, no persisted state (stateless, like the real
 upstream-is-source-of-truth posture).
 
-The resolved credential is accepted but its secret is NEVER used, logged, or echoed.
+`deadline_ms` (the remaining budget) is accepted for interface conformance but the
+mock does not act on it — the dispatch layer's timeout enforces the budget for the
+mock; the REAL backend will use it to bound its upstream HTTP client. The resolved
+credential is accepted but its secret is NEVER used, logged, or echoed.
 """
 
 from __future__ import annotations
@@ -74,15 +79,14 @@ _DIRECT_FAIL_OUTCOMES = {
 }
 
 
-def _confirmation_id(tenant: str, key_material: str) -> str:
-    """Deterministically derive a confirmation id from stable inputs.
+def _confirmation_id(tenant: str, idempotency_key: str) -> str:
+    """Deterministically derive a confirmation id from (tenant, idempotency_key).
 
-    Pure function of (tenant, key_material): same inputs always yield the same id.
-    For `book`, `key_material` is the idempotency_key when present, so a retried
-    booking returns the identical confirmation_id (idempotent — no double-book).
+    Pure function: the same key always yields the same id, so a retried booking
+    returns the identical confirmation_id (idempotent — no double-book, review #5).
     """
 
-    digest = hashlib.sha256(f"{tenant}:{key_material}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{tenant}:{idempotency_key}".encode()).hexdigest()
     return f"MOCK-{tenant.upper()}-{digest[:12].upper()}"
 
 
@@ -112,7 +116,7 @@ class MockReservationsBackend:
             raise outcome(source=SOURCE, mock=True)
 
     async def availability(
-        self, req: AvailabilityRequest, cred: ResolvedCredential
+        self, req: AvailabilityRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> AvailabilityResult:
         await self._simulate_upstream()
 
@@ -132,7 +136,7 @@ class MockReservationsBackend:
         return AvailabilityResult(state="available", slots=slots)
 
     async def book(
-        self, req: BookingRequest, cred: ResolvedCredential
+        self, req: BookingRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> BookingResult:
         await self._simulate_upstream()
 
@@ -147,20 +151,15 @@ class MockReservationsBackend:
             # Definitive: the slot is gone -> unavailable, no confirmation.
             raise BookingUnavailableOutcome(source=SOURCE, mock=True)
 
-        # Idempotent confirmation id: keyed on idempotency_key when supplied, else on
-        # the booking's stable content. A retry with the same key => same id.
-        key_material = (
-            req.idempotency_key
-            if req.idempotency_key is not None
-            else f"{req.name}|{req.party_size}|{req.datetime.isoformat()}"
-        )
+        # Idempotent confirmation id, keyed on the REQUIRED idempotency_key: a retry
+        # with the same key returns the same id (no double-book, review #5).
         return BookingResult(
             state="confirmed",
-            confirmation_id=_confirmation_id(req.tenant, key_material),
+            confirmation_id=_confirmation_id(req.tenant, req.idempotency_key),
         )
 
     async def modify(
-        self, req: ModifyRequest, cred: ResolvedCredential
+        self, req: ModifyRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> ModifyResult:
         await self._simulate_upstream()
 
@@ -169,7 +168,7 @@ class MockReservationsBackend:
         return ModifyResult(state="modified", confirmation_id=req.confirmation_id)
 
     async def cancel(
-        self, req: CancelRequest, cred: ResolvedCredential
+        self, req: CancelRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> CancelResult:
         await self._simulate_upstream()
 

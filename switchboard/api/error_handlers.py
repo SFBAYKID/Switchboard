@@ -26,7 +26,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from switchboard.api.timing import elapsed_ms, get_request_id
+from switchboard.api.timing import REQUEST_ID_HEADER, elapsed_ms, get_request_id
 from switchboard.core.envelope import error_envelope_dict
 from switchboard.core.errors import AppError, BadRequestError, InternalError
 
@@ -36,6 +36,7 @@ logger = logging.getLogger("switchboard.errors")
 def _render(request: Request, exc: AppError, status_code: int) -> JSONResponse:
     """Serialize an `AppError` into the uniform error envelope `JSONResponse`."""
 
+    request_id = get_request_id(request)
     body = error_envelope_dict(
         code=exc.code,
         message=exc.message,
@@ -44,9 +45,15 @@ def _render(request: Request, exc: AppError, status_code: int) -> JSONResponse:
         source=exc.source,
         latency_ms=elapsed_ms(request),
         mock=exc.mock,
-        request_id=get_request_id(request),
+        request_id=request_id,
     )
-    return JSONResponse(status_code=status_code, content=body)
+    response = JSONResponse(status_code=status_code, content=body)
+    # Echo the correlation id here too (F3): the 500 catch-all runs in
+    # ServerErrorMiddleware, OUTSIDE the timing middleware, so its post-step that
+    # normally sets this header is skipped. Setting it here guarantees the header is
+    # present on EVERY error response, including the internal-error net.
+    response.headers[REQUEST_ID_HEADER] = request_id
+    return response
 
 
 async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:

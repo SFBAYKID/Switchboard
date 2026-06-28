@@ -13,7 +13,7 @@ Module layout (the shape every future integration copies):
   - interface.py      the typed `ReservationsBackend` Protocol every backend implements
   - backend_mock.py   `MockReservationsBackend` — fake data, the DEFAULT
   - backend_opentable.py  real client — clearly-marked SEAM, not implemented yet (Rule 2)
-  - registry.py       backend selection from config (mock | opentable)
+  - backends.py       backend selection from config (mock | opentable)
 """
 
 from __future__ import annotations

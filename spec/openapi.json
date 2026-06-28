@@ -78,7 +78,7 @@
         "type": "object"
       },
       "BookingRequest": {
-        "description": "`POST /v1/reservations/book` body (a consequential write \u2014 Rule 9 / review #5).\n\n`idempotency_key` makes the write retry-safe: a retried `book` with the same key\nmust NOT create a second booking. The mock derives a deterministic\nconfirmation_id from the key to demonstrate this at the contract level; the real\nbackend forwards the key to OpenTable's idempotency mechanism (verified against\nOpenTable docs before that backend is written \u2014 Rule 2).",
+        "description": "`POST /v1/reservations/book` body (a consequential write \u2014 Rule 9 / review #5).\n\n`idempotency_key` is REQUIRED and makes the write retry-safe: a retried `book`\nwith the same key must NOT create a second booking. The mock derives a\ndeterministic confirmation_id from the key; the real backend forwards it to\nOpenTable's idempotency mechanism (verified against OpenTable docs before that\nbackend is written \u2014 Rule 2).",
         "properties": {
           "datetime": {
             "format": "date-time",
@@ -86,16 +86,10 @@
             "type": "string"
           },
           "idempotency_key": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
           },
           "name": {
             "maxLength": 200,
@@ -121,7 +115,8 @@
           "tenant",
           "name",
           "party_size",
-          "datetime"
+          "datetime",
+          "idempotency_key"
         ],
         "title": "BookingRequest",
         "type": "object"
@@ -156,16 +151,10 @@
             "type": "string"
           },
           "idempotency_key": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
           },
           "tenant": {
             "maxLength": 64,
@@ -177,7 +166,8 @@
         },
         "required": [
           "tenant",
-          "confirmation_id"
+          "confirmation_id",
+          "idempotency_key"
         ],
         "title": "CancelRequest",
         "type": "object"
@@ -247,6 +237,18 @@
           "state": {
             "anyOf": [
               {
+                "enum": [
+                  "available",
+                  "unavailable",
+                  "confirmed",
+                  "modified",
+                  "cancelled",
+                  "timeout",
+                  "auth_error",
+                  "rate_limited",
+                  "unknown",
+                  "requires_human"
+                ],
                 "type": "string"
               },
               {
@@ -311,6 +313,18 @@
           "state": {
             "anyOf": [
               {
+                "enum": [
+                  "available",
+                  "unavailable",
+                  "confirmed",
+                  "modified",
+                  "cancelled",
+                  "timeout",
+                  "auth_error",
+                  "rate_limited",
+                  "unknown",
+                  "requires_human"
+                ],
                 "type": "string"
               },
               {
@@ -375,6 +389,18 @@
           "state": {
             "anyOf": [
               {
+                "enum": [
+                  "available",
+                  "unavailable",
+                  "confirmed",
+                  "modified",
+                  "cancelled",
+                  "timeout",
+                  "auth_error",
+                  "rate_limited",
+                  "unknown",
+                  "requires_human"
+                ],
                 "type": "string"
               },
               {
@@ -439,6 +465,18 @@
           "state": {
             "anyOf": [
               {
+                "enum": [
+                  "available",
+                  "unavailable",
+                  "confirmed",
+                  "modified",
+                  "cancelled",
+                  "timeout",
+                  "auth_error",
+                  "rate_limited",
+                  "unknown",
+                  "requires_human"
+                ],
                 "type": "string"
               },
               {
@@ -456,6 +494,72 @@
           "request_id"
         ],
         "title": "Envelope[ModifyResult]",
+        "type": "object"
+      },
+      "ErrorEnvelope": {
+        "description": "The uniform envelope on a FAILURE path, as a concrete (non-generic) model.\n\nUsed to DOCUMENT error responses in the OpenAPI spec (the routes reference it via\n`responses=`), so the published contract tells the truth about 4xx/5xx \u2014 not just\nthe 200 success shape. It is shape-identical to `Envelope` with `ok=false` and\n`data=null`; the runtime error body is produced by `error_envelope_dict()`.",
+        "properties": {
+          "data": {
+            "title": "Data",
+            "type": "null"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorInfo"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "integer"
+          },
+          "mock": {
+            "title": "Mock",
+            "type": "boolean"
+          },
+          "ok": {
+            "const": false,
+            "default": false,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "available",
+                  "unavailable",
+                  "confirmed",
+                  "modified",
+                  "cancelled",
+                  "timeout",
+                  "auth_error",
+                  "rate_limited",
+                  "unknown",
+                  "requires_human"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "error",
+          "source",
+          "latency_ms",
+          "mock",
+          "request_id"
+        ],
+        "title": "ErrorEnvelope",
         "type": "object"
       },
       "ErrorInfo": {
@@ -536,16 +640,10 @@
             "title": "Datetime"
           },
           "idempotency_key": {
-            "anyOf": [
-              {
-                "maxLength": 200,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Idempotency Key"
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
           },
           "party_size": {
             "anyOf": [
@@ -570,7 +668,8 @@
         },
         "required": [
           "tenant",
-          "confirmation_id"
+          "confirmation_id",
+          "idempotency_key"
         ],
         "title": "ModifyRequest",
         "type": "object"
@@ -667,6 +766,13 @@
         "title": "VersionInfo",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "description": "Switchboard's internal bearer token (Authorization: Bearer <token>).",
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -748,7 +854,7 @@
         "operationId": "availability_v1_reservations_availability_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -762,7 +868,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
               "title": "X-Deadline-Ms"
             }
           }
@@ -788,17 +894,72 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request \u2014 error.code=bad_request (state=null)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Missing/invalid bearer token \u2014 error.code=unauthorized (state=null)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown tenant, fail closed \u2014 error.code=not_found (state=null)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream rate-limited \u2014 state=rate_limited."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream auth failure or unusable response \u2014 state=auth_error|unknown."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream exceeded the deadline \u2014 state=timeout."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Reservation Availability v1 (real-time)",
         "tags": [
           "reservations"
@@ -807,11 +968,11 @@
     },
     "/v1/reservations/book": {
       "post": {
-        "description": "Create a booking (consequential write; idempotent; race-safe \u2014 review #5).\n\nReturns `ok=true` ONLY on an actual confirmation. A slot-gone race surfaces as\n`unavailable`, an ambiguous result as `requires_human` \u2014 never a false success.",
+        "description": "Create a booking (consequential write; idempotent; race-safe \u2014 review #5).\n\nReturns `ok=true` ONLY on an actual confirmation. A slot-gone race surfaces as\n`unavailable`, an ambiguous result (incl. a write timeout) as `requires_human` \u2014\nnever a false success.",
         "operationId": "book_v1_reservations_book_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -825,7 +986,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
               "title": "X-Deadline-Ms"
             }
           }
@@ -851,17 +1012,82 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request \u2014 error.code=bad_request (state=null)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Missing/invalid bearer token \u2014 error.code=unauthorized (state=null)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown tenant, fail closed \u2014 error.code=not_found (state=null)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ambiguous or slot-gone outcome \u2014 state=requires_human|unavailable."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream rate-limited \u2014 state=rate_limited."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream auth failure or unusable response \u2014 state=auth_error|unknown."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream exceeded the deadline \u2014 state=timeout."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Reservation Booking v1 (consequential write)",
         "tags": [
           "reservations"
@@ -874,7 +1100,7 @@
         "operationId": "cancel_v1_reservations_cancel_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -888,7 +1114,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
               "title": "X-Deadline-Ms"
             }
           }
@@ -914,17 +1140,82 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request \u2014 error.code=bad_request (state=null)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Missing/invalid bearer token \u2014 error.code=unauthorized (state=null)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown tenant, fail closed \u2014 error.code=not_found (state=null)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ambiguous or slot-gone outcome \u2014 state=requires_human|unavailable."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream rate-limited \u2014 state=rate_limited."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream auth failure or unusable response \u2014 state=auth_error|unknown."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream exceeded the deadline \u2014 state=timeout."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Cancel a reservation (consequential write)",
         "tags": [
           "reservations"
@@ -937,7 +1228,7 @@
         "operationId": "modify_v1_reservations_modify_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -951,7 +1242,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget). On exceed, the endpoint returns state=timeout.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
               "title": "X-Deadline-Ms"
             }
           }
@@ -977,17 +1268,82 @@
             },
             "description": "Successful Response"
           },
-          "422": {
+          "400": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid request \u2014 error.code=bad_request (state=null)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Missing/invalid bearer token \u2014 error.code=unauthorized (state=null)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown tenant, fail closed \u2014 error.code=not_found (state=null)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Ambiguous or slot-gone outcome \u2014 state=requires_human|unavailable."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream rate-limited \u2014 state=rate_limited."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream auth failure or unusable response \u2014 state=auth_error|unknown."
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Upstream exceeded the deadline \u2014 state=timeout."
           }
         },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
         "summary": "Modify a reservation (consequential write)",
         "tags": [
           "reservations"

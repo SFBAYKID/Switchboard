@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from tests.helpers import WHEN, auth_headers, availability_payload, booking_payload
+from tests.helpers import (
+    auth_headers,
+    availability_payload,
+    booking_payload,
+    cancel_payload,
+    modify_payload,
+)
 
 AVAIL = "/v1/reservations/availability"
 BOOK = "/v1/reservations/book"
@@ -59,22 +65,27 @@ def test_book_different_key_different_confirmation(client: TestClient) -> None:
 
 
 def test_modify_echoes_confirmation(client: TestClient) -> None:
-    body = client.post(
-        MODIFY,
-        headers=auth_headers(),
-        json={"tenant": "demo", "confirmation_id": "MOCK-DEMO-ABC123", "datetime": WHEN},
-    ).json()
+    body = client.post(MODIFY, headers=auth_headers(), json=modify_payload()).json()
     assert body["ok"] is True
     assert body["state"] == "modified"
     assert body["data"]["confirmation_id"] == "MOCK-DEMO-ABC123"
 
 
 def test_cancel_echoes_confirmation(client: TestClient) -> None:
-    body = client.post(
-        CANCEL,
-        headers=auth_headers(),
-        json={"tenant": "demo", "confirmation_id": "MOCK-DEMO-ABC123"},
-    ).json()
+    body = client.post(CANCEL, headers=auth_headers(), json=cancel_payload()).json()
     assert body["ok"] is True
     assert body["state"] == "cancelled"
     assert body["data"]["confirmation_id"] == "MOCK-DEMO-ABC123"
+
+
+def test_write_requires_idempotency_key(client: TestClient) -> None:
+    # Review #5: every write REQUIRES an idempotency key — omitting it is a 400.
+    body_without_key = {
+        "tenant": "demo",
+        "name": "Ada Lovelace",
+        "party_size": 2,
+        "datetime": "2026-07-01T19:00:00",
+    }
+    resp = client.post(BOOK, headers=auth_headers(), json=body_without_key)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "bad_request"

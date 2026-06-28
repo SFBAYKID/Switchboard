@@ -37,12 +37,30 @@ every path.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel
 
 # `data`'s concrete type varies per endpoint (AvailabilityResult, BookingResult, …).
 T = TypeVar("T")
+
+# The gateway's full normalized result-state vocabulary (review #2/#3). Enumerated in
+# the contract (not a bare string) so callers can branch on a closed set. Definitive
+# successes: available/unavailable/confirmed/modified/cancelled. Non-definitive
+# outcomes: timeout/auth_error/rate_limited/unknown/requires_human. `null` on
+# non-capability endpoints (health, version info).
+NormalizedState = Literal[
+    "available",
+    "unavailable",
+    "confirmed",
+    "modified",
+    "cancelled",
+    "timeout",
+    "auth_error",
+    "rate_limited",
+    "unknown",
+    "requires_human",
+]
 
 
 class ErrorInfo(BaseModel):
@@ -66,9 +84,28 @@ class Envelope(BaseModel, Generic[T]):
     """
 
     ok: bool
-    state: str | None = None
+    state: NormalizedState | None = None
     data: T | None = None
     error: ErrorInfo | None = None
+    source: str
+    latency_ms: int
+    mock: bool
+    request_id: str
+
+
+class ErrorEnvelope(BaseModel):
+    """The uniform envelope on a FAILURE path, as a concrete (non-generic) model.
+
+    Used to DOCUMENT error responses in the OpenAPI spec (the routes reference it via
+    `responses=`), so the published contract tells the truth about 4xx/5xx — not just
+    the 200 success shape. It is shape-identical to `Envelope` with `ok=false` and
+    `data=null`; the runtime error body is produced by `error_envelope_dict()`.
+    """
+
+    ok: Literal[False] = False
+    state: NormalizedState | None = None
+    data: None = None
+    error: ErrorInfo
     source: str
     latency_ms: int
     mock: bool

@@ -55,21 +55,25 @@ class OpenTableReservationsBackend:
         pass
 
     async def availability(
-        self, req: AvailabilityRequest, cred: ResolvedCredential
+        self, req: AvailabilityRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> AvailabilityResult:
+        # When implemented: set the upstream HTTP client timeout from deadline_ms so
+        # the vendor call is bounded by the caller's deadline (review #4).
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def book(
-        self, req: BookingRequest, cred: ResolvedCredential
+        self, req: BookingRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> BookingResult:
+        # When implemented: forward req.idempotency_key to OpenTable's idempotency
+        # mechanism, and bound the call by deadline_ms (Rule 2 / review #4-#5).
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def modify(
-        self, req: ModifyRequest, cred: ResolvedCredential
+        self, req: ModifyRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> ModifyResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def cancel(
-        self, req: CancelRequest, cred: ResolvedCredential
+        self, req: CancelRequest, cred: ResolvedCredential, deadline_ms: int
     ) -> CancelResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)

@@ -20,8 +20,10 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 
 from switchboard import __version__
 from switchboard.api.error_handlers import register_exception_handlers
@@ -50,6 +52,48 @@ def _validate_startup(settings: Settings) -> None:
             "No reservations tenant credentials are configured. Set at least one "
             f"SWITCHBOARD_{CREDENTIAL_NAMESPACE}__<TENANT>__API_KEY before starting."
         )
+
+
+# The internal bearer-token security scheme advertised in the contract (F2). The
+# gate is enforced at runtime by `api.auth.require_bearer_token`; this makes the
+# requirement visible to anyone generating a client from the spec.
+_BEARER_SCHEME_NAME = "BearerAuth"
+
+
+def _build_openapi(app: FastAPI) -> dict[str, Any]:
+    """Generate the OpenAPI schema, correcting it to match the real contract.
+
+    Two corrections so the published spec does not lie about the running service
+    (charter Principle 1):
+      - Strip the auto `422` response: validation failures are returned as `400` +
+        the uniform envelope (see the validation handler), never a 422.
+      - Declare the bearer-token security scheme and require it on the gated
+        `/v1/reservations/*` routes (the system endpoints stay open).
+    """
+
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+
+    components = schema.setdefault("components", {})
+    components.setdefault("securitySchemes", {})[_BEARER_SCHEME_NAME] = {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Switchboard's internal bearer token (Authorization: Bearer <token>).",
+    }
+
+    for path, path_item in schema.get("paths", {}).items():
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue  # skip path-item-level "parameters"/"summary"/etc.
+            operation.get("responses", {}).pop("422", None)
+            if path.startswith("/v1/reservations"):
+                operation["security"] = [{_BEARER_SCHEME_NAME: []}]
+
+    return schema
 
 
 @asynccontextmanager
@@ -88,6 +132,15 @@ def create_app() -> FastAPI:
     # Routers. System (health/version) is unauthenticated; reservations is gated.
     app.include_router(system.router)
     app.include_router(reservations.router)
+
+    # Custom OpenAPI so the published contract matches the running service (F1/F2):
+    # accurate error responses (declared per-route), no spurious 422, bearer security.
+    def custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            app.openapi_schema = _build_openapi(app)
+        return app.openapi_schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]
 
     return app
 

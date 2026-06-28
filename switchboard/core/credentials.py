@@ -28,7 +28,11 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from switchboard.core.errors import BadRequestError, TenantNotFoundError
+from switchboard.core.errors import (
+    GATEWAY_SOURCE,
+    BadRequestError,
+    TenantNotFoundError,
+)
 
 # A tenant identifier must be a safe slug. Re-validated here (defense in depth) even
 # though the request models also constrain it, because this value is interpolated
@@ -60,13 +64,15 @@ def resolve_credential(
     namespace: str,
     tenant: str,
     *,
-    source: str,
-    mock: bool,
+    source: str = GATEWAY_SOURCE,
+    mock: bool = False,
 ) -> ResolvedCredential:
     """Resolve the upstream credential for (namespace, tenant), or fail closed.
 
-    `source`/`mock` are envelope-tagging metadata stamped onto any raised error so
-    the failure envelope correctly attributes itself to the calling integration.
+    Credential resolution happens BEFORE any backend runs, so a failure here is a
+    gateway-level fault: by default the raised error is tagged source="gateway",
+    mock=False (no backend served it), consistent with the auth/validation faults.
+    `source`/`mock` can be overridden by direct callers/tests.
 
     Raises:
         BadRequestError: the tenant identifier is malformed.

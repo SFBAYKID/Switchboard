@@ -5,23 +5,22 @@ contract the MOCK backend and the future real OpenTable backend BOTH satisfy —
 swapping mock -> real changes nothing for the caller (Rule 12: model the shapes as
 explicit, precise types so mock and real are provably identical).
 
-Normalized states (review #2/#3): a real-time endpoint's outcome is exactly one
-normalized `state`. The SUCCESS states live in these result models:
-  - availability: `available` | `unavailable`
-  - book:         `confirmed`
-  - modify:       `modified`
-  - cancel:       `cancelled`
-The non-definitive states (`unknown`, `timeout`, `auth_error`, `rate_limited`,
-`requires_human`, and booking's `unavailable` race) are NOT successes — they are
-raised as `AppError` outcomes (see `core.errors`) and surfaced as `ok=false` with the
-normalized `state`. So a result model here only ever represents a definitive success,
-and a confirmation id only ever exists on an actual confirmation (no false success).
+Normalized states (review #2/#3) live in `core.envelope.NormalizedState` (the single
+source of truth for the vocabulary). The SUCCESS states are constrained per result
+model below (availability: available|unavailable; book: confirmed; modify: modified;
+cancel: cancelled). The non-definitive states (unknown/timeout/auth_error/
+rate_limited/requires_human, and booking's unavailable race) are NOT successes — they
+are raised as `AppError` outcomes (see `core.errors`). So a result model here only
+ever represents a definitive success, and a confirmation id only ever exists on an
+actual confirmation (no false success).
 
-Idempotency (review #5): every WRITE (book/modify/cancel) accepts an
-`idempotency_key` so a retried write cannot double-act.
+Idempotency (review #5): every WRITE (book/modify/cancel) REQUIRES an
+`idempotency_key` so a retried write cannot double-act. It is mandatory, not
+optional — a write without one cannot be made retry-safe.
 
 The deadline (review #4) is NOT a body field — it is the `X-Deadline-Ms` request
-header (a cross-cutting concern), parsed in the API layer.
+header (a cross-cutting concern), parsed in the API layer and propagated into the
+backend call.
 
 NOTE on field name `datetime`: the public contract uses `datetime`, so the module is
 imported as `dt` to avoid shadowing while keeping the field name.
@@ -34,22 +33,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
-# The full normalized-state vocabulary for reservation real-time endpoints (review
-# #2). Documented here for reference; success states are used in the result models,
-# failure/ambiguous states are carried by the error classes in core.errors.
-ReservationState = Literal[
-    "available",
-    "unavailable",
-    "confirmed",
-    "modified",
-    "cancelled",
-    "unknown",
-    "timeout",
-    "auth_error",
-    "rate_limited",
-    "requires_human",
-]
-
 # A tenant identifier: an IDENTIFIER, never a credential. Constrained to a safe slug
 # because it is later used (uppercased) to resolve a per-tenant credential env var.
 Tenant = Annotated[
@@ -61,8 +44,9 @@ Tenant = Annotated[
 # mock model a realistic "too large to book online" case.
 PartySize = Annotated[int, Field(ge=1, le=100)]
 
-# An idempotency key for writes: optional but recommended; bounded length.
-IdempotencyKey = Annotated[str | None, Field(default=None, max_length=200)]
+# A REQUIRED idempotency key for writes (review #5): a retried write reuses it so the
+# upstream cannot double-act. Bounded length; must be non-empty.
+IdempotencyKey = Annotated[str, Field(min_length=1, max_length=200)]
 
 
 # ── Requests ───────────────────────────────────────────────────────────────────
@@ -79,18 +63,18 @@ class AvailabilityRequest(BaseModel):
 class BookingRequest(BaseModel):
     """`POST /v1/reservations/book` body (a consequential write — Rule 9 / review #5).
 
-    `idempotency_key` makes the write retry-safe: a retried `book` with the same key
-    must NOT create a second booking. The mock derives a deterministic
-    confirmation_id from the key to demonstrate this at the contract level; the real
-    backend forwards the key to OpenTable's idempotency mechanism (verified against
-    OpenTable docs before that backend is written — Rule 2).
+    `idempotency_key` is REQUIRED and makes the write retry-safe: a retried `book`
+    with the same key must NOT create a second booking. The mock derives a
+    deterministic confirmation_id from the key; the real backend forwards it to
+    OpenTable's idempotency mechanism (verified against OpenTable docs before that
+    backend is written — Rule 2).
     """
 
     tenant: Tenant
     name: str = Field(min_length=1, max_length=200)  # guest name on the booking
     party_size: PartySize
     datetime: dt.datetime
-    idempotency_key: IdempotencyKey = None
+    idempotency_key: IdempotencyKey
 
 
 class ModifyRequest(BaseModel):
@@ -100,7 +84,7 @@ class ModifyRequest(BaseModel):
     confirmation_id: str = Field(min_length=1, max_length=200)
     party_size: PartySize | None = None  # new size, if changing
     datetime: dt.datetime | None = None  # new time, if changing
-    idempotency_key: IdempotencyKey = None
+    idempotency_key: IdempotencyKey
 
 
 class CancelRequest(BaseModel):
@@ -108,7 +92,7 @@ class CancelRequest(BaseModel):
 
     tenant: Tenant
     confirmation_id: str = Field(min_length=1, max_length=200)
-    idempotency_key: IdempotencyKey = None
+    idempotency_key: IdempotencyKey
 
 
 # ── Results (the `data` payloads — definitive successes only) ─────────────────────

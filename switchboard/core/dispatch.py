@@ -30,7 +30,12 @@ import logging
 from collections.abc import Awaitable
 from typing import TypeVar
 
-from switchboard.core.errors import AppError, TimeoutOutcome, UnknownOutcome
+from switchboard.core.errors import (
+    AppError,
+    RequiresHumanOutcome,
+    TimeoutOutcome,
+    UnknownOutcome,
+)
 
 logger = logging.getLogger("switchboard.dispatch")
 
@@ -67,6 +72,7 @@ async def call_with_budget(
     timeout_ms: int,
     source: str,
     mock: bool,
+    is_write: bool = False,
 ) -> R:
     """Await `awaitable` under a hard timeout, mapping faults to normalized outcomes.
 
@@ -75,23 +81,39 @@ async def call_with_budget(
         timeout_ms: effective upstream timeout in ms (from compute_effective_timeout_ms).
         source: integration source label for any error envelope (e.g. "reservations").
         mock: whether the active backend is a mock (for the envelope's `mock` flag).
+        is_write: whether this is a consequential write. A write that times out is
+            AMBIGUOUS — the upstream may already have committed before cancellation —
+            so it must NOT be returned as a blindly-retryable `timeout` (that invites
+            a double-book). It is surfaced as `requires_human` instead (review #5).
 
     Returns:
         The backend's result on success.
 
     Raises:
-        TimeoutOutcome: the upstream exceeded the timeout (504, state="timeout").
+        TimeoutOutcome: a READ exceeded the timeout (504, state="timeout", retryable).
+        RequiresHumanOutcome: a WRITE exceeded the timeout (409, ambiguous, not
+            blindly retryable).
         UnknownOutcome: any other unclassified upstream fault (502, state="unknown").
         AppError: re-raised unchanged if the backend already raised a normalized one.
     """
 
     try:
         # asyncio.wait_for cancels the underlying coroutine on timeout, so a slow
-        # upstream task does not leak past the budget.
+        # upstream task does not leak past the budget. (The real backend additionally
+        # bounds its OWN client via deadline_ms so a write is aborted cleanly, not
+        # cancelled mid-flight.)
         return await asyncio.wait_for(awaitable, timeout=timeout_ms / 1000.0)
     except asyncio.TimeoutError as exc:
-        # The upstream was too slow. Answer the caller promptly with a clean,
-        # retryable timeout outcome rather than blocking (review #3/#4).
+        if is_write:
+            # Ambiguous write: do not present a retryable timeout. Require human
+            # reconciliation before any retry (the write may have committed).
+            raise RequiresHumanOutcome(
+                "The write exceeded its deadline and may or may not have completed; "
+                "reconcile before retrying.",
+                source=source,
+                mock=mock,
+            ) from exc
+        # A read was too slow. Answer promptly with a clean, retryable timeout.
         raise TimeoutOutcome(source=source, mock=mock) from exc
     except AppError:
         # The backend raised a normalized outcome it already mapped to the contract

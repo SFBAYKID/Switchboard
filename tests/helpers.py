@@ -38,16 +38,42 @@ def booking_payload(
     tenant: str = "demo",
     party_size: int = 2,
     name: str = "Ada Lovelace",
-    idempotency_key: str | None = None,
+    idempotency_key: str = "idem-default-key",
 ) -> dict[str, object]:
-    """A valid booking request body (optionally with an idempotency key)."""
+    """A valid booking request body (idempotency_key is REQUIRED — review #5)."""
 
-    body: dict[str, object] = {
+    return {
         "tenant": tenant,
         "name": name,
         "party_size": party_size,
         "datetime": WHEN,
+        "idempotency_key": idempotency_key,
     }
-    if idempotency_key is not None:
-        body["idempotency_key"] = idempotency_key
-    return body
+
+
+def modify_payload(
+    tenant: str = "demo",
+    confirmation_id: str = "MOCK-DEMO-ABC123",
+    idempotency_key: str = "idem-default-key",
+) -> dict[str, object]:
+    """A valid modify request body (idempotency_key REQUIRED)."""
+
+    return {
+        "tenant": tenant,
+        "confirmation_id": confirmation_id,
+        "idempotency_key": idempotency_key,
+    }
+
+
+def cancel_payload(
+    tenant: str = "demo",
+    confirmation_id: str = "MOCK-DEMO-ABC123",
+    idempotency_key: str = "idem-default-key",
+) -> dict[str, object]:
+    """A valid cancel request body (idempotency_key REQUIRED)."""
+
+    return {
+        "tenant": tenant,
+        "confirmation_id": confirmation_id,
+        "idempotency_key": idempotency_key,
+    }
