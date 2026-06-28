@@ -52,6 +52,7 @@ from switchboard.integrations.reservations.models import (
     CancelResult,
     ModifyRequest,
     ModifyResult,
+    combined_datetime,
 )
 from switchboard.integrations.reservations.mock_store import (
     MockReservationStore,
@@ -111,10 +112,16 @@ class MockReservationsBackend:
             return AvailabilityResult(state="unavailable", slots=[])
 
         # Otherwise reflect the live store (slots minus what's been booked).
-        return self._store.query_availability(cred.tenant, req.party_size, req.datetime)
+        return self._store.query_availability(
+            cred.tenant, combined_datetime(req.date, req.time), req.party_size
+        )
 
     async def book(
-        self, req: BookingRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: BookingRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> BookingResult:
         await self._simulate_upstream()
 
@@ -127,23 +134,31 @@ class MockReservationsBackend:
         try:
             # Stateful + idempotent: same idempotency_key returns the same booking;
             # an exhausted slot is the natural availability!=booked race.
-            return self._store.create_booking(cred.tenant, req)
+            return self._store.create_booking(cred.tenant, req, idempotency_key)
         except SlotUnavailable as exc:
             raise BookingUnavailableOutcome(source=SOURCE, mock=True) from exc
 
     async def modify(
-        self, req: ModifyRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: ModifyRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> ModifyResult:
         await self._simulate_upstream()
 
         try:
             return self._store.modify_booking(cred.tenant, req)
         except ReservationMissing as exc:
-            # Tenant-scoped lookup: unknown id, or it belongs to another tenant.
+            # Restaurant-scoped lookup: unknown id, or it belongs to another restaurant.
             raise ReservationNotFoundError(source=SOURCE, mock=True) from exc
 
     async def cancel(
-        self, req: CancelRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: CancelRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> CancelResult:
         await self._simulate_upstream()
 

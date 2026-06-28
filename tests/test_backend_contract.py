@@ -1,15 +1,13 @@
 """Backend-agnostic contract test (the mock↔real parity guard — QA finding M2).
 
 The highest-leverage correctness risk in a mock-first gateway is the mock and the
-real backend diverging, so everything "works in mock" and breaks the day real
-OpenTable is wired in. mypy's structural Protocol check guards the SIGNATURES; this
+real backend diverging. mypy's structural Protocol check guards the SIGNATURES; this
 suite guards the runtime SHAPES + state vocabulary of the results.
 
-It is parametrized so the real `OpenTableReservationsBackend` can be added the moment
-it exists (against the sandbox) and must pass the EXACT same assertions — that is what
-makes the swap safe. Today only the mock is exercised; this is verified-on-mock, not
-verified-against-real (honest split). The autouse fixture resets the mock store before
-each test, so state from one test never leaks into another.
+Parametrized so the real `OpenTableReservationsBackend` can be added the moment it
+exists (against the sandbox) and must pass the EXACT same assertions. Today only the
+mock is exercised: verified-on-mock, NOT verified-against-real. The autouse fixture
+resets the mock store before each test.
 """
 
 from __future__ import annotations
@@ -30,15 +28,17 @@ from switchboard.integrations.reservations.models import (
     BookingResult,
     CancelRequest,
     CancelResult,
+    Customer,
     ModifyRequest,
     ModifyResult,
 )
 
-# A resolved credential is required by the interface; its secret value is irrelevant
-# to the mock and is never used/echoed. DEMO is seeded in the mock store.
+# DEMO is seeded in the mock store. Credential secret is irrelevant to the mock.
 CRED = ResolvedCredential(integration="OPENTABLE", tenant="DEMO", api_key="unused", rid="r")
-WHEN = dt.datetime(2026, 7, 1, 19, 0, 0)  # a seeded slot for DEMO
+DATE = dt.date(2026, 7, 1)
+TIME = "19:00"  # a seeded slot for DEMO
 DEADLINE_MS = 1000
+CUSTOMER = Customer(name="Ada", phone="+14155551212")
 
 
 @pytest.fixture
@@ -54,7 +54,9 @@ def backend() -> Iterator[ReservationsBackend]:
 
 async def test_availability_shape(backend: ReservationsBackend) -> None:
     result = await backend.availability(
-        AvailabilityRequest(tenant="demo", party_size=2, datetime=WHEN), CRED, DEADLINE_MS
+        AvailabilityRequest(restaurant_id="demo", date=DATE, time=TIME, party_size=2),
+        CRED,
+        DEADLINE_MS,
     )
     assert isinstance(result, AvailabilityResult)
     assert result.state in {"available", "unavailable"}
@@ -64,31 +66,28 @@ async def test_availability_shape(backend: ReservationsBackend) -> None:
 
 async def test_book_shape_and_idempotency(backend: ReservationsBackend) -> None:
     req = BookingRequest(
-        tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="same"
+        restaurant_id="demo", date=DATE, time=TIME, party_size=2, customer=CUSTOMER
     )
-    first = await backend.book(req, CRED, DEADLINE_MS)
+    first = await backend.book(req, CRED, DEADLINE_MS, "same")
     assert isinstance(first, BookingResult)
     assert first.state == "confirmed"
     assert first.confirmation_id
     # Same idempotency key => same confirmation (no double-book).
-    second = await backend.book(req, CRED, DEADLINE_MS)
+    second = await backend.book(req, CRED, DEADLINE_MS, "same")
     assert second.confirmation_id == first.confirmation_id
 
 
 async def test_modify_shape(backend: ReservationsBackend) -> None:
     cid = (
         await backend.book(
-            BookingRequest(
-                tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="m"
-            ),
+            BookingRequest(restaurant_id="demo", date=DATE, time=TIME, party_size=2, customer=CUSTOMER),
             CRED,
             DEADLINE_MS,
+            "m",
         )
     ).confirmation_id
     result = await backend.modify(
-        ModifyRequest(tenant="demo", confirmation_id=cid, idempotency_key="m2"),
-        CRED,
-        DEADLINE_MS,
+        ModifyRequest(restaurant_id="demo", confirmation_id=cid), CRED, DEADLINE_MS, "m2"
     )
     assert isinstance(result, ModifyResult)
     assert result.state == "modified"
@@ -98,17 +97,14 @@ async def test_modify_shape(backend: ReservationsBackend) -> None:
 async def test_cancel_shape(backend: ReservationsBackend) -> None:
     cid = (
         await backend.book(
-            BookingRequest(
-                tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="c"
-            ),
+            BookingRequest(restaurant_id="demo", date=DATE, time=TIME, party_size=2, customer=CUSTOMER),
             CRED,
             DEADLINE_MS,
+            "c",
         )
     ).confirmation_id
     result = await backend.cancel(
-        CancelRequest(tenant="demo", confirmation_id=cid, idempotency_key="c2"),
-        CRED,
-        DEADLINE_MS,
+        CancelRequest(restaurant_id="demo", confirmation_id=cid), CRED, DEADLINE_MS, "c2"
     )
     assert isinstance(result, CancelResult)
     assert result.state == "cancelled"

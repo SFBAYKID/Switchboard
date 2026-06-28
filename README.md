@@ -84,16 +84,24 @@ returned.
 | `GET /healthz` (+ `/health` alias) | Liveness (no auth, no secrets) | system |
 | `GET /v1` | Contract/version info | system |
 
+Request body uses `restaurant_id` (the gateway identifier, **not** the OpenTable
+RID/key), split `date` (`YYYY-MM-DD`) + `time` (`HH:MM`), and a `customer` object on
+booking. See `spec/openapi.json` (the source of truth) or `docs/nico-caller-integration-prompt.md`.
+
 ### Request headers
 
 - `Authorization: Bearer <token>` — **required** on every `/v1/reservations/*` call.
-- `X-Deadline-Ms: <int>` — **optional** caller hard deadline (ms). The effective
-  deadline is `min(this, the per-endpoint budget)`; on exceed the endpoint returns
-  `state=timeout` within budget (review #4).
+- `Idempotency-Key: <id>` — **required on writes** (`book`/`modify`/`cancel`); a stable
+  key per logical write, reused on retry, so a retry can't double-act (review #5).
+- `X-Deadline-Ms: <int>` — **optional** caller hard deadline (ms). Effective deadline is
+  `min(this, the per-endpoint budget)`; on exceed a read returns `state=timeout` and a
+  write `state=requires_human` within budget (review #4).
 - `X-Request-ID: <token>` — **optional** correlation id; echoed back (else generated).
 
-Writes (`book`/`modify`/`cancel`) accept an `idempotency_key` in the body so a retry
-cannot double-act (review #5).
+> **Verification (Rule 2):** the reservations contract is Switchboard's OWN normalized
+> shape. The OpenTable backing of `book`/`modify`/`cancel` and `customer.email`/`notes`
+> is **unverified** (OpenTable's API is partner-gated) — see architecture.md "OpenTable
+> integration — verification status". Everything is mock today (`mock:true`).
 
 ## Run it
 
@@ -114,7 +122,7 @@ uvicorn switchboard.api.main:app --host 127.0.0.1 --port 8080
 TOKEN=$(grep '^SWITCHBOARD_API_TOKEN=' .env | cut -d= -f2-)
 curl -s -X POST http://127.0.0.1:8080/v1/reservations/availability \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"tenant":"demo","party_size":2,"datetime":"2026-07-01T19:00:00"}'
+  -d '{"restaurant_id":"demo","date":"2026-07-01","time":"19:00","party_size":2}'
 ```
 
 ## Develop

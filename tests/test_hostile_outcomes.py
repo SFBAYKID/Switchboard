@@ -12,7 +12,13 @@ from fastapi.testclient import TestClient
 
 from switchboard.api.main import app
 from switchboard.core.config import reset_settings_cache
-from tests.helpers import ENVELOPE_FIELDS, auth_headers, availability_payload, booking_payload
+from tests.helpers import (
+    ENVELOPE_FIELDS,
+    auth_headers,
+    availability_payload,
+    booking_payload,
+    write_headers,
+)
 
 AVAIL = "/v1/reservations/availability"
 BOOK = "/v1/reservations/book"
@@ -58,7 +64,7 @@ def test_availability_hostile_outcomes(
 def test_book_requires_human_on_ambiguous_race(monkeypatch: pytest.MonkeyPatch) -> None:
     # Review #5: ambiguous booking outcome -> requires_human, NEVER a false confirmation.
     with _client_with(monkeypatch, fail="booking_race") as c:
-        resp = c.post(BOOK, headers=auth_headers(), json=booking_payload())
+        resp = c.post(BOOK, headers=write_headers("race-1"), json=booking_payload())
 
     assert resp.status_code == 409
     body = resp.json()
@@ -71,7 +77,7 @@ def test_book_requires_human_on_ambiguous_race(monkeypatch: pytest.MonkeyPatch) 
 def test_book_unavailable_when_slot_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     # Review #5: the availability != booked race, slot gone -> unavailable, no booking.
     with _client_with(monkeypatch, fail="slot_gone") as c:
-        resp = c.post(BOOK, headers=auth_headers(), json=booking_payload())
+        resp = c.post(BOOK, headers=write_headers("slot-1"), json=booking_payload())
 
     assert resp.status_code == 409
     body = resp.json()

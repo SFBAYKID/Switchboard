@@ -4,9 +4,9 @@
       "AvailabilityRequest": {
         "description": "`POST /v1/reservations/availability` body (real-time, deadline-budgeted).",
         "properties": {
-          "datetime": {
-            "format": "date-time",
-            "title": "Datetime",
+          "date": {
+            "format": "date",
+            "title": "Date",
             "type": "string"
           },
           "party_size": {
@@ -15,24 +15,32 @@
             "title": "Party Size",
             "type": "integer"
           },
-          "tenant": {
+          "restaurant_id": {
+            "description": "Switchboard restaurant identifier (NOT the OpenTable RID/key).",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "Tenant",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "time": {
+            "description": "HH:MM (24-hour, restaurant local).",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Time",
             "type": "string"
           }
         },
         "required": [
-          "tenant",
-          "party_size",
-          "datetime"
+          "restaurant_id",
+          "date",
+          "time",
+          "party_size"
         ],
         "title": "AvailabilityRequest",
         "type": "object"
       },
       "AvailabilityResult": {
-        "description": "`data` for availability: the normalized success state + candidate slots.\n\n`state` is `available` (slots present) or `unavailable` (none). Non-definitive\noutcomes (timeout/auth_error/\u2026) never reach here \u2014 they are raised as errors.",
+        "description": "`data` for availability.\n\n`state` is `available` when the REQUESTED date/time is bookable, else\n`unavailable`. `slots` lists the open slots that day (the requested one if open,\nplus alternatives) so the caller can offer options either way.",
         "properties": {
           "slots": {
             "items": {
@@ -58,19 +66,26 @@
         "type": "object"
       },
       "AvailabilitySlot": {
-        "description": "One bookable slot returned by availability.",
+        "description": "One bookable slot (date + HH:MM time + the party size it was checked for).",
         "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
           "party_size": {
             "title": "Party Size",
             "type": "integer"
           },
           "time": {
-            "format": "date-time",
+            "description": "HH:MM (24-hour, restaurant local).",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
             "title": "Time",
             "type": "string"
           }
         },
         "required": [
+          "date",
           "time",
           "party_size"
         ],
@@ -78,24 +93,27 @@
         "type": "object"
       },
       "BookingRequest": {
-        "description": "`POST /v1/reservations/book` body (a consequential write \u2014 Rule 9 / review #5).\n\n`idempotency_key` is REQUIRED and makes the write retry-safe: a retried `book`\nwith the same key must NOT create a second booking. The mock derives a\ndeterministic confirmation_id from the key; the real backend forwards it to\nOpenTable's idempotency mechanism (verified against OpenTable docs before that\nbackend is written \u2014 Rule 2).",
+        "description": "`POST /v1/reservations/book` body (a consequential write \u2014 Rule 9 / review #5).\n\nRetry-safety is provided by the REQUIRED `Idempotency-Key` request header, NOT a\nbody field: a retried book with the same key must not create a second booking.",
         "properties": {
-          "datetime": {
-            "format": "date-time",
-            "title": "Datetime",
+          "customer": {
+            "$ref": "#/components/schemas/Customer"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
             "type": "string"
           },
-          "idempotency_key": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "party_size": {
             "maximum": 100.0,
@@ -103,26 +121,33 @@
             "title": "Party Size",
             "type": "integer"
           },
-          "tenant": {
+          "restaurant_id": {
+            "description": "Switchboard restaurant identifier (NOT the OpenTable RID/key).",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "Tenant",
+            "title": "Restaurant Id",
+            "type": "string"
+          },
+          "time": {
+            "description": "HH:MM (24-hour, restaurant local).",
+            "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+            "title": "Time",
             "type": "string"
           }
         },
         "required": [
-          "tenant",
-          "name",
+          "restaurant_id",
+          "date",
+          "time",
           "party_size",
-          "datetime",
-          "idempotency_key"
+          "customer"
         ],
         "title": "BookingRequest",
         "type": "object"
       },
       "BookingResult": {
-        "description": "`data` for book: an actual confirmation only.\n\n`state` is always `confirmed` and `confirmation_id` is always present. Any\nnon-confirmed booking outcome (slot gone, ambiguous, timeout, \u2026) is raised as an\nerror so this success shape can never carry a false/empty confirmation.",
+        "description": "`data` for book: an actual confirmation only (`state` always `confirmed`).",
         "properties": {
           "confirmation_id": {
             "title": "Confirmation Id",
@@ -142,7 +167,7 @@
         "type": "object"
       },
       "CancelRequest": {
-        "description": "`POST /v1/reservations/cancel` body (a consequential write \u2014 Rule 9 / review #5).",
+        "description": "`POST /v1/reservations/cancel` body (a consequential write). Idempotency-Key required.",
         "properties": {
           "confirmation_id": {
             "maxLength": 200,
@@ -150,24 +175,18 @@
             "title": "Confirmation Id",
             "type": "string"
           },
-          "idempotency_key": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "type": "string"
-          },
-          "tenant": {
+          "restaurant_id": {
+            "description": "Switchboard restaurant identifier (NOT the OpenTable RID/key).",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "Tenant",
+            "title": "Restaurant Id",
             "type": "string"
           }
         },
         "required": [
-          "tenant",
-          "confirmation_id",
-          "idempotency_key"
+          "restaurant_id",
+          "confirmation_id"
         ],
         "title": "CancelRequest",
         "type": "object"
@@ -190,6 +209,41 @@
           "confirmation_id"
         ],
         "title": "CancelResult",
+        "type": "object"
+      },
+      "Customer": {
+        "description": "The guest the reservation is for. `name` + `phone` are required for a booking.",
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "phone": {
+            "maxLength": 40,
+            "minLength": 3,
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "phone"
+        ],
+        "title": "Customer",
         "type": "object"
       },
       "Envelope_AvailabilityResult_": {
@@ -619,7 +673,7 @@
         "type": "object"
       },
       "ModifyRequest": {
-        "description": "`POST /v1/reservations/modify` body (a consequential write \u2014 Rule 9 / review #5).",
+        "description": "`POST /v1/reservations/modify` body (a consequential write).\n\nProvide the fields you want to change (date/time/party_size). Idempotency-Key\nheader required.",
         "properties": {
           "confirmation_id": {
             "maxLength": 200,
@@ -627,23 +681,17 @@
             "title": "Confirmation Id",
             "type": "string"
           },
-          "datetime": {
+          "date": {
             "anyOf": [
               {
-                "format": "date-time",
+                "format": "date",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Datetime"
-          },
-          "idempotency_key": {
-            "maxLength": 200,
-            "minLength": 1,
-            "title": "Idempotency Key",
-            "type": "string"
+            "title": "Date"
           },
           "party_size": {
             "anyOf": [
@@ -658,18 +706,31 @@
             ],
             "title": "Party Size"
           },
-          "tenant": {
+          "restaurant_id": {
+            "description": "Switchboard restaurant identifier (NOT the OpenTable RID/key).",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9_-]+$",
-            "title": "Tenant",
+            "title": "Restaurant Id",
             "type": "string"
+          },
+          "time": {
+            "anyOf": [
+              {
+                "description": "HH:MM (24-hour, restaurant local).",
+                "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time"
           }
         },
         "required": [
-          "tenant",
-          "confirmation_id",
-          "idempotency_key"
+          "restaurant_id",
+          "confirmation_id"
         ],
         "title": "ModifyRequest",
         "type": "object"
@@ -850,11 +911,11 @@
     },
     "/v1/reservations/availability": {
       "post": {
-        "description": "Check reservation availability (real-time; deadline-budgeted).",
+        "description": "Check whether the requested restaurant/date/time/party is available.",
         "operationId": "availability_v1_reservations_availability_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -868,7 +929,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
               "title": "X-Deadline-Ms"
             }
           }
@@ -968,11 +1029,11 @@
     },
     "/v1/reservations/book": {
       "post": {
-        "description": "Create a booking (consequential write; idempotent; race-safe \u2014 review #5).\n\nReturns `ok=true` ONLY on an actual confirmation. A slot-gone race surfaces as\n`unavailable`, an ambiguous result (incl. a write timeout) as `requires_human` \u2014\nnever a false success.",
+        "description": "Book the reservation (consequential write; idempotent; race-safe \u2014 review #5).\n\nReturns `ok=true` ONLY on an actual confirmation. A slot-gone race surfaces as\n`unavailable`, an ambiguous result (incl. a write timeout) as `requires_human` \u2014\nnever a false success.",
         "operationId": "book_v1_reservations_book_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -986,8 +1047,21 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
               "title": "X-Deadline-Ms"
+            }
+          },
+          {
+            "description": "Required on writes. A stable key per logical write; reuse on retry.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "Required on writes. A stable key per logical write; reuse on retry.",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -1100,7 +1174,7 @@
         "operationId": "cancel_v1_reservations_cancel_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -1114,8 +1188,21 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
               "title": "X-Deadline-Ms"
+            }
+          },
+          {
+            "description": "Required on writes. A stable key per logical write; reuse on retry.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "Required on writes. A stable key per logical write; reuse on retry.",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],
@@ -1228,7 +1315,7 @@
         "operationId": "modify_v1_reservations_modify_post",
         "parameters": [
           {
-            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+            "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
             "in": "header",
             "name": "X-Deadline-Ms",
             "required": false,
@@ -1242,8 +1329,21 @@
                   "type": "null"
                 }
               ],
-              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. NOTE: a deadline at or below the gateway's safety margin (~50ms) leaves no time for the upstream and will almost always yield a timeout/requires_human.",
+              "description": "Caller's hard deadline in milliseconds. The effective deadline is min(this, the per-endpoint budget), minus a small safety margin. On exceed, a read returns state=timeout and a write returns state=requires_human. A deadline at/below the safety margin (~50ms) will almost always time out.",
               "title": "X-Deadline-Ms"
+            }
+          },
+          {
+            "description": "Required on writes. A stable key per logical write; reuse on retry.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "description": "Required on writes. A stable key per logical write; reuse on retry.",
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
             }
           }
         ],

@@ -176,18 +176,24 @@ mock→real swap.
 
 | Field        | Type                       | Meaning                                                                 |
 |--------------|----------------------------|-------------------------------------------------------------------------|
-| `ok`         | `bool`                     | `true` if the call succeeded; `false` on any error/timeout.             |
+| `ok`         | `bool`                     | `true` only for a DEFINITIVE, trustworthy answer; `false` otherwise.    |
+| `state`      | `string \| null`           | Normalized result state on real-time endpoints (see below); `null` on system endpoints. |
 | `data`       | `object \| null`           | The integration-specific payload when `ok`; `null` otherwise.           |
 | `error`      | `object \| null`           | A structured error when not `ok`; `null` otherwise. See below.          |
-| `source`     | `string`                   | Which module/backend answered (e.g. `"reservations"`).                  |
+| `source`     | `string`                   | Which module/backend answered (e.g. `"reservations"`, `"gateway"`).     |
 | `latency_ms` | `integer`                  | Measured time Switchboard spent producing the answer (mostly upstream). |
 | `mock`       | `bool`                     | `true` if a mock backend served this response; `false` for real.       |
+| `request_id` | `string`                   | Correlation id (also returned in the `X-Request-ID` header).            |
 
-The **`error`** object is itself structured and stable (plan):
-`{ code: string, message: string, retryable: bool }` — e.g.
-`code = "upstream_timeout" | "upstream_error" | "bad_request" | "unauthorized" | "not_found"`.
-A caller branches on `ok` and, when degrading, on `error.code` / `error.retryable` — never by
-string-matching a free-text message.
+The **`error`** object is structured and stable:
+`{ code: string, message: string, retryable: bool }`. A caller branches on `ok` and the
+normalized `state` (or `error.code` / `error.retryable`) — never by string-matching a message.
+
+**Normalized result states (real-time endpoints).** Every real-time endpoint resolves to exactly
+one of: `available`, `unavailable`, `confirmed`, `modified`, `cancelled`, `unknown`, `timeout`,
+`auth_error`, `rate_limited`, `requires_human`. `ok` is `true` only for the definitive successes
+(availability answered; a real confirmation/modify/cancel); the rest are `ok=false`. Gateway-level
+faults carry `state=null` with `error.code ∈ { bad_request, unauthorized, not_found, internal_error }`.
 
 The **`mock`** flag is deliberately first-class: a caller (and a human reading logs) can always
 tell at a glance whether a confirmation came from fake data or a real upstream, which matters
@@ -195,14 +201,24 @@ during the OpenTable approval window when both modes coexist across integrations
 
 ### Endpoints (v1 — first module + sketched future modules)
 
-Reservations (the first module — mock-first; **real-time** unless noted):
+Reservations (the first module — mock-first; **real-time** unless noted). The body uses
+`restaurant_id` (the gateway identifier, NOT the OpenTable RID/key), split `date`+`time`, and a
+`customer` object on booking. Writes require an `Idempotency-Key` header; an optional
+`X-Deadline-Ms` header carries the caller's hard deadline:
 
-- `POST /v1/reservations/availability` — body `{ tenant, party_size, datetime }` →
-  `data: { available: bool, slots: [...] }`. **Real-time** (latency-budgeted).
-- `POST /v1/reservations/book` — body `{ tenant, name, party_size, datetime }` →
-  `data: { confirmation_id, status }`. A **write** (consequential).
-- `POST /v1/reservations/modify` — modify an existing booking. A **write**.
-- `POST /v1/reservations/cancel` — cancel an existing booking. A **write**.
+- `POST /v1/reservations/availability` — body `{ restaurant_id, date, time, party_size }` →
+  `data: { state, slots: [{ date, time, party_size }] }`. **Real-time** (deadline-budgeted).
+- `POST /v1/reservations/book` — body `{ restaurant_id, date, time, party_size, customer:{ name,
+  phone, email? }, notes? }` + `Idempotency-Key` header → `data: { state: "confirmed",
+  confirmation_id }`. A **write** (consequential).
+- `POST /v1/reservations/modify` — body `{ restaurant_id, confirmation_id, date?, time?,
+  party_size? }` + `Idempotency-Key`. A **write**.
+- `POST /v1/reservations/cancel` — body `{ restaurant_id, confirmation_id }` + `Idempotency-Key`.
+  A **write**.
+
+> **Verification status (Rule 1/2):** these are Switchboard's OWN normalized shapes. The OpenTable
+> backing of `book`/`modify`/`cancel` and of the `customer.email`/`notes` fields is **UNVERIFIED**
+> (OpenTable's API is partner-gated — see "OpenTable integration — verification status" below).
 
 Operational endpoints:
 
@@ -453,6 +469,42 @@ The universal quality bar, reoriented to this project:
 - **Commit/push honesty.** Stage with explicit `git add <path>` only (never `-A`/`.`, so a `.env`
   never slips in); descriptive messages; show `git diff --stat` and the unpushed log before a push;
   report the real result — never claim "pushed" if it failed.
+
+---
+
+## OpenTable integration — verification status (Rule 2; read before writing the real client)
+
+**Reference this section before implementing or describing the OpenTable backend.** It records
+what is actually verifiable today so we never present unverified vendor specifics as fact.
+
+**[fact / cited 2026-06] OpenTable has NO open/public API.** It is partner/affiliate-gated:
+you must apply, execute an agreement, and be approved; the detailed per-API documentation
+(endpoints, auth, fields, error codes) is only available AFTER approval. Public sources:
+- https://docs.opentable.com/ (the API docs — content gated)
+- https://dev.opentable.com/ (developer portal)
+- https://www.opentable.com/restaurant-solutions/api-partners/ and its `/faqs/` and
+  `/become-a-partner/` and `/terms-and-conditions/` pages
+- https://support.opentable.com/s/article/What-is-OpenTable-s-Consumer-API (gated)
+
+**What we therefore CANNOT verify today (treat as UNKNOWN, do not invent):**
+- exact base host + endpoint paths for availability / create / modify / cancel;
+- whether server-side create/modify/cancel exist for our partner tier **at all** (non-authoritative
+  sources suggest some affiliate tiers are reservation-*link* only — must be confirmed);
+- the auth scheme (the code assumes RID + API key; it may be `client_id`/OAuth);
+- the idempotency mechanism + header name (may be `X-Request-Id`, not `Idempotency-Key`);
+- which guest fields OpenTable accepts/returns (does `email` / `notes` exist?);
+- error codes, rate-limit semantics, pagination.
+
+**Consequence for the gateway contract:** the caller-facing reservations contract is **Switchboard's
+OWN normalized abstraction**, not a description of OpenTable. The `book`/`modify`/`cancel` operations
+and the `customer.email`/`notes` fields are exposed as our normalization with their OpenTable backing
+**unverified**; the mock serves them (flagged `mock:true`) and the real client is an unimplemented
+seam. When approval lands, confirm each item above against the real docs and **adjust the gateway
+contract if OpenTable cannot back it** (e.g. drop `modify`/`cancel` if the tier is link-only).
+
+**Facts to capture at approval (fill in, then implement):** base host; endpoint paths; auth scheme;
+real identifier (RID vs other); idempotency header; accepted guest/notes fields; error + rate-limit
+semantics. Until every one is confirmed, `RESERVATIONS_BACKEND` stays `mock`.
 
 ---
 
