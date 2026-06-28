@@ -86,7 +86,8 @@ returned.
 
 Request body uses `restaurant_id` (the gateway identifier, **not** the OpenTable
 RID/key), split `date` (`YYYY-MM-DD`) + `time` (`HH:MM`), and a `customer` object on
-booking. See `spec/openapi.json` (the source of truth) or `nico-caller-integration-prompt.md`.
+booking. The committed `spec/openapi.json` is the source of truth. (The caller
+integration handoff prompt for the nico voice agent is kept outside this repo.)
 
 ### Request headers
 
