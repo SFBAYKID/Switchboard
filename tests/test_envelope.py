@@ -24,9 +24,9 @@ def test_success_envelope_shape_and_invariants(client: TestClient) -> None:
 
 
 def test_error_envelope_shape_matches_success(client: TestClient) -> None:
-    # Unknown tenant => ok=false path (fail closed).
+    # Unknown restaurant => ok=false path (fail closed).
     resp = client.post(
-        AVAIL, headers=auth_headers(), json=availability_payload(tenant="ghosttenant")
+        AVAIL, headers=auth_headers(), json=availability_payload(restaurant_id="ghosttenant")
     )
     assert resp.status_code == 404
     body = resp.json()
@@ -47,7 +47,7 @@ def test_bad_request_is_uniform_envelope(client: TestClient) -> None:
     resp = client.post(
         AVAIL,
         headers=auth_headers(),
-        json={"tenant": "demo", "party_size": 0, "datetime": "2026-07-01T19:00:00"},
+        json={"restaurant_id": "demo", "date": "2026-07-01", "time": "19:00", "party_size": 0},
     )
     assert resp.status_code == 400
     body = resp.json()

@@ -1,196 +1,203 @@
 # Prompt for the nico-project agent — integrating with Switchboard (Reservations API)
 
-> Paste everything below the line to the Claude working on the **nico** project. It is
-> the integration brief + the contract + the task. (Two values are environment-specific
-> and will be given to you by the operator: the **base URL** and the **bearer token** —
-> placeholders are marked `<...>`.)
+> Paste everything below the line to the Claude working on the **nico** project. Two
+> values are environment-specific and the operator will give them to you: the **base
+> URL** and the **bearer token** (marked `<...>`).
 
 ---
 
-You are integrating the **nico** agent with **Switchboard**, an internal HTTP API
-gateway that owns third‑party integrations. Your first integration is **Reservations**
-(OpenTable, behind the gateway). Today Switchboard runs in **mock mode**: it returns
-fake‑but‑contract‑shaped reservation data through the real code path, so you can build
-and fully test the nico ↔ Switchboard loop now, before OpenTable partner access exists.
-When access lands, **nothing on your side changes** — same endpoints, same request
-bodies, same response shape; only the response's `mock` flag flips from `true` to
-`false`.
+You are integrating **nico** — a **live voice phone agent** — with **Switchboard**, an
+internal HTTP API gateway that owns third-party integrations. Your integration is
+**Reservations**.
 
-**Your job has two parts:**
-1. Build nico's Switchboard **client** + a small demo program that calls the
-   reservations endpoints and **mutates data** (availability → book → modify → cancel),
-   handling **every** normalized result state.
-2. **Tell the Switchboard team what you need.** If you need an endpoint, field, or
-   behavior that isn't in the contract below (e.g. a GET to look up a reservation),
-   say so — we'll build the right thing together. Do not work around a missing
-   capability silently.
+**The call flow you are implementing:** a customer calls in → normal greeting → asks
+for a reservation (a restaurant, a date, a time, a party size). nico says *"One second,
+let me check availability for you,"* and **calls Switchboard's availability endpoint**.
+If available, nico says *"Yes, that time is available."* The customer confirms → nico
+says *"Okay, great,"* and **calls Switchboard's booking endpoint** to reserve it. nico
+collects the details conversationally, but when it calls Switchboard it must send a
+**structured JSON object with all required fields**.
 
-## Ground rules (important)
+## CRITICAL — read this first (honesty about the data)
+- Switchboard is in **mock mode** today. It returns **fake but contract-shaped**
+  reservation data through the real code path, so you can build and fully test the
+  nico↔Switchboard loop **now**, before OpenTable access exists. Every response has
+  `"mock": true`. When real OpenTable access lands, `mock` flips to `false` and **your
+  code does not change**.
+- **This contract is Switchboard's OWN normalized shape — NOT a copy of OpenTable's
+  API.** OpenTable's API is partner-gated and not publicly documented, so the OpenTable
+  backing of `book`/`modify`/`cancel` and the `customer.email`/`notes` fields is
+  **unverified and may change at integration**. Build to *Switchboard's* contract below;
+  do not assume these are OpenTable's field names. If you need a field/operation that
+  isn't here, tell us — don't invent one.
+
+## Ground rules
 - **You are just an HTTP client.** You never hold OpenTable credentials or call
-  OpenTable directly. You send Switchboard a bearer token + a `tenant` identifier;
-  Switchboard resolves the tenant's upstream credentials itself.
-- **You own the fallback, not Switchboard.** Switchboard returns a *normalized state*
-  fast; deciding what nico does with it (retry, take a message, escalate to a human)
-  is your orchestration. A non‑success state must **never** be treated as success.
-- **Never assume a write succeeded.** A booking is confirmed only when you get
-  `state: "confirmed"` with a `confirmation_id`. Anything else is not a booking.
+  OpenTable directly. You send Switchboard a bearer token + a `restaurant_id`;
+  Switchboard resolves that restaurant's upstream credentials itself.
+- **You own the fallback.** Switchboard returns a *normalized state* fast; deciding what
+  nico says/does (retry, offer another time, take a message, escalate) is your job.
+- **Never assume a booking happened.** A reservation is made **only** when you get
+  `"state": "confirmed"` with a `confirmation_id`. Anything else is not a booking.
 
 ## Connection
 - **Base URL (dev):** `<BASE_URL>` (e.g. `http://127.0.0.1:8080` — localhost, internal only)
-- **Auth:** every `/v1/...` request must send `Authorization: Bearer <SWITCHBOARD_TOKEN>`.
-  A missing/invalid token returns a `401` envelope (code `unauthorized`).
-- **Tenant:** pass `tenant` in the request body. It's an identifier, not a secret. For
-  dev the seeded tenants are **`demo`** and **`acme`**.
-- **Health (no auth):** `GET /healthz` → `{"status":"ok",...}`. `GET /v1` → version/info.
+- **Auth:** every `/v1/...` request sends `Authorization: Bearer <SWITCHBOARD_TOKEN>`.
+- **restaurant_id:** identifies the restaurant (a slug, e.g. `demo`). It is NOT a secret
+  and NOT the OpenTable RID. Dev seeds two restaurants: `demo` and `acme`.
+- **Health (no auth):** `GET /healthz` → `{"status":"ok",...}`.
 
-## The uniform response envelope (EVERY response — success and failure)
-```jsonc
+---
+
+# The exact API contract (answers your 7 questions)
+
+## 1 & 2. The endpoints
+- **Check availability:** `POST /v1/reservations/availability`
+- **Create/book:** `POST /v1/reservations/book`
+- (Also available, OpenTable-backing unverified: `POST /v1/reservations/modify`,
+  `POST /v1/reservations/cancel`.)
+
+## 3. Headers
+| Header | On | Required? | Purpose |
+|---|---|---|---|
+| `Authorization: Bearer <token>` | all `/v1/*` | **required** | Switchboard's internal token (NOT an OpenTable key) |
+| `Content-Type: application/json` | all POSTs | **required** | JSON body |
+| `Idempotency-Key: <id>` | **book / modify / cancel** | **required** | A stable id per booking attempt; **reuse it on retry** so a dropped line can't double-book |
+| `X-Deadline-Ms: <int>` | any | optional (recommended) | Your hard deadline in ms. A human is on the line — set e.g. `2000`. On exceed you get a fast `timeout`/`requires_human`, never a hang |
+| `X-Request-ID: <id>` | any | optional (recommended) | Correlation id (use the call id); echoed back in the body + `X-Request-ID` header |
+
+> You do **not** send the OpenTable RID or any `X-Restaurant-ID` header — `restaurant_id`
+> in the body is the single source of truth.
+
+## 4. Request payloads (what nico sends)
+
+**Availability** — `POST /v1/reservations/availability`
+```json
 {
-  "ok": true,                 // true ONLY for a definitive, trustworthy answer
-  "state": "available",       // the normalized result state (see table); null on system endpoints
-  "data": { ... },            // payload on success; null on failure
-  "error": {                  // present on failure; null on success
-    "code": "timeout",
-    "message": "...",         // safe text; do NOT branch on it
-    "retryable": true
-  },
-  "source": "reservations",   // which module answered ("gateway" for auth/validation faults)
-  "latency_ms": 12,
-  "mock": true,               // true while in mock mode; flips to false at go-live
-  "request_id": "..."         // correlation id; also returned in the X-Request-ID header
+  "restaurant_id": "demo",
+  "date": "2026-07-01",
+  "time": "19:00",
+  "party_size": 4
 }
 ```
-**Branch on `state` (or `error.code`), never on `ok` alone, and never on `message`.**
 
-## Normalized states you MUST handle
-| state | ok | HTTP | meaning → what nico should do |
+**Book** — `POST /v1/reservations/book` (header `Idempotency-Key: <uuid-per-attempt>`)
+```json
+{
+  "restaurant_id": "demo",
+  "date": "2026-07-01",
+  "time": "19:00",
+  "party_size": 4,
+  "customer": {
+    "name": "John Smith",
+    "phone": "+14155551212",
+    "email": "john@example.com"
+  },
+  "notes": "Customer requested outdoor seating if available."
+}
+```
+
+## 5. Response format (what nico gets back — the SAME envelope on every response)
+```jsonc
+{
+  "ok": true,                  // true ONLY for a definitive, trustworthy answer
+  "state": "available",        // the normalized result — THE field you switch on
+  "data": { ... },             // payload on success; null on failure
+  "error": {                   // present on failure; null on success
+    "code": "timeout",
+    "message": "...",          // safe text — do NOT branch on it
+    "retryable": true
+  },
+  "source": "reservations",
+  "latency_ms": 12,
+  "mock": true,
+  "request_id": "…"
+}
+```
+
+**Availability success** (`data`): `{ "state": "available"|"unavailable", "slots": [ { "date": "2026-07-01", "time": "19:00", "party_size": 4 } ] }`
+- `state":"available"` ⇒ the requested time is bookable. `slots` lists open times that
+  day (the requested one if open, plus alternatives to offer).
+
+**Book success** (`data`): `{ "state": "confirmed", "confirmation_id": "MOCK-DEMO-…" }`
+- A `confirmation_id` appears **only** here.
+
+## 6. Required vs optional fields
+**Availability:** `restaurant_id` ✅, `date` ✅ (`YYYY-MM-DD`), `time` ✅ (`HH:MM`, 24-hour,
+restaurant-local), `party_size` ✅ (1–100; `>12` returns `unavailable`).
+**Book:** all of the above ✅, plus `customer.name` ✅, `customer.phone` ✅,
+`customer.email` ⛔ optional, `notes` ⛔ optional, and the `Idempotency-Key` header ✅.
+
+## 7. Error handling — branch on `state` (or `error.code`), never on `ok` alone
+| state / code | HTTP | retryable | What nico should do / say |
 |---|---|---|---|
-| `available` | true | 200 | slots returned → offer them |
-| `unavailable` | true (avail) / false (book) | 200 / 409 | no availability / slot gone → offer alternatives |
-| `confirmed` | true | 200 | booking made → `data.confirmation_id` is real |
-| `modified` / `cancelled` | true | 200 | the write applied |
-| `timeout` | false | 504 | upstream too slow → safe to retry (reads only) |
-| `rate_limited` | false | 429 | back off and retry later |
-| `auth_error` | false | 502 | tenant's upstream creds rejected → escalate (don't retry) |
-| `unknown` | false | 502 | upstream errored/unusable → treat as failure |
-| `requires_human` | false | 409 | **ambiguous write** (may or may not have happened) → **do NOT blind‑retry; reconcile/escalate** |
-| (gateway) `bad_request` | false | 400 | your request was malformed |
-| (gateway) `unauthorized` | false | 401 | bad/missing bearer token |
-| (gateway) `not_found` | false | 404 | unknown tenant, or unknown/!your reservation |
-| (gateway) `internal_error` | false | 500 | gateway bug → fail safe |
+| `available` | 200 | — | "Yes, that time is available." |
+| `unavailable` | 200 (avail) / 409 (book) | no | "That time isn't available — I have 7:30 or 8:00, would either work?" (use `slots`) |
+| `confirmed` | 200 | — | "Okay, great — you're booked, confirmation <id>." |
+| `timeout` | 504 | yes (reads) | "I'm having trouble reaching the system — let me try once more / take a message." Retry a READ once; for a write see `requires_human`. |
+| `rate_limited` | 429 | yes (backoff) | brief hold / retry shortly |
+| `auth_error` | 502 | no | system issue → take a message + alert ops (do not retry) |
+| `unknown` | 502 | yes | treat as failure → offer callback / take a message |
+| `requires_human` | 409 | no | **ambiguous write** — the booking may or may not have gone through. **Do NOT silently retry.** Tell the customer you'll confirm and have a human verify. |
+| `bad_request` | 400 | no | nico sent a bad/missing field — fix the payload (bug) |
+| `unauthorized` | 401 | no | bad token — config/ops issue |
+| `not_found` | 404 | no | unknown `restaurant_id`, or unknown/!your `confirmation_id` |
 
-## Endpoints (all POST, JSON in/out)
+**Booking idempotency (important for a phone agent):** generate ONE `Idempotency-Key`
+(a UUID) the moment the customer says "yes, book it," and send it on the book request.
+If the call drops / you must retry **that same booking**, send the **same** key — you'll
+get the same `confirmation_id` back, never a second reservation. A different booking gets
+a new key.
 
-### Availability — `POST /v1/reservations/availability` (real‑time)
-Request:
+## Example error responses
+Booking the same slot after it filled (the availability≠booked race), HTTP 409:
 ```json
-{ "tenant": "demo", "party_size": 2, "datetime": "2026-07-01T19:00:00" }
+{ "ok": false, "state": "unavailable", "data": null,
+  "error": { "code": "unavailable", "message": "The requested slot is no longer available.", "retryable": false },
+  "source": "reservations", "latency_ms": 8, "mock": true, "request_id": "…" }
 ```
-Success `data`:
+A booking that exceeded the deadline (ambiguous), HTTP 409:
 ```json
-{ "state": "available", "slots": [ { "time": "2026-07-01T19:00:00", "party_size": 2 } ] }
-```
-`party_size` 1–100; `> 12` returns `unavailable` (mirrors "large parties can't book online").
-
-### Book — `POST /v1/reservations/book` (consequential write)
-Request (`idempotency_key` is **REQUIRED**):
-```json
-{ "tenant": "demo", "name": "Ada Lovelace", "party_size": 2,
-  "datetime": "2026-07-01T19:00:00", "idempotency_key": "nico-<stable-uuid>" }
-```
-Success `data`:
-```json
-{ "state": "confirmed", "confirmation_id": "MOCK-DEMO-…" }
+{ "ok": false, "state": "requires_human", "data": null,
+  "error": { "code": "requires_human", "message": "The write exceeded its deadline and may or may not have completed; reconcile before retrying.", "retryable": false },
+  "source": "reservations", "latency_ms": 1950, "mock": true, "request_id": "…" }
 ```
 
-### Modify — `POST /v1/reservations/modify` (write)
-```json
-{ "tenant": "demo", "confirmation_id": "MOCK-DEMO-…",
-  "party_size": 4, "datetime": "2026-07-01T20:00:00", "idempotency_key": "nico-<uuid>" }
+## End-to-end (matches the voice flow)
+```bash
+TOKEN="<SWITCHBOARD_TOKEN>"; BASE="<BASE_URL>"
+# 1) "let me check availability"
+curl -s -X POST $BASE/v1/reservations/availability \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'X-Deadline-Ms: 2000' \
+  -d '{"restaurant_id":"demo","date":"2026-07-01","time":"19:00","party_size":4}'
+# 2) customer confirms -> "okay, great" -> book (note the Idempotency-Key)
+curl -s -X POST $BASE/v1/reservations/book \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: call-7f3a-booking-1' -H 'X-Deadline-Ms: 2500' \
+  -d '{"restaurant_id":"demo","date":"2026-07-01","time":"19:00","party_size":4,
+       "customer":{"name":"John Smith","phone":"+14155551212"}}'
 ```
-Success `data`: `{ "state": "modified", "confirmation_id": "MOCK-DEMO-…" }`. Unknown/foreign id → `404 not_found`.
-
-### Cancel — `POST /v1/reservations/cancel` (write)
-```json
-{ "tenant": "demo", "confirmation_id": "MOCK-DEMO-…", "idempotency_key": "nico-<uuid>" }
-```
-Success `data`: `{ "state": "cancelled", "confirmation_id": "MOCK-DEMO-…" }`. Cancelling twice is idempotent (still `cancelled`). Unknown/foreign id → `404 not_found`.
-
-## Idempotency (writes) — get this right
-- **Every write requires `idempotency_key`.** Generate ONE stable key per logical
-  action (e.g. per user's "book this slot" intent) and **reuse it on every retry** of
-  that same action. Same key ⇒ same result, no double‑book.
-- On `timeout`/`requires_human` for a **write**, the write may or may not have landed.
-  **Do not blind‑retry.** Reconcile (re‑check state / escalate). A retry is only safe
-  with the *same* idempotency_key.
-
-## Deadlines (optional but recommended)
-- Send `X-Deadline-Ms: <int>` — your hard budget in ms. Switchboard answers within
-  `min(your deadline, its per‑endpoint budget)`; if the upstream is slower you get a
-  `timeout` (read) or `requires_human` (write) **fast**, never a hang. (A deadline at
-  or below ~50ms leaves no time for the upstream and will usually time out.)
-
-## Correlation
-- Send `X-Request-ID: <id>` so nico's logs and Switchboard's logs line up. If you
-  don't, Switchboard generates one. It's always returned (header + `request_id`).
 
 ## Testing against the dummy data (mock mode)
-The mock is **stateful and seeded from a JSON file**, so it behaves like a real
-reservation system. Seeded for `demo` and `acme` on **2026‑07‑01**:
-- `19:00:00` capacity 10 — general booking
-- `19:30:00` **capacity 1** — use this to trigger the **availability≠booked race**
-- `20:00:00` capacity 5
+The mock is **stateful** (book consumes a slot; availability then reflects it). Seeded
+for `demo` and `acme` on **2026-07-01**: `19:00` (capacity 10), **`19:30` (capacity 1 —
+use to force the race)**, `20:00` (capacity 5). Scenarios you can trigger yourself:
+`confirmed` (book 19:00), the race → `unavailable` (book 19:30 twice with different keys),
+`not_found` (book/cancel a made-up confirmation_id), `unavailable` (party_size > 12),
+`bad_request` (omit a field or the Idempotency-Key header), `unauthorized` (omit token).
+The `timeout`/`auth_error`/`rate_limited`/`unknown` paths need server-side injection —
+ask the operator, or request a mock-only `X-Mock-Scenario` header and we'll add it.
 
-Scenarios you can trigger **yourself** today:
-- **confirmed**: book `2026-07-01T19:00:00`.
-- **availability reflects bookings**: book the `19:30` slot, then call availability — it's gone.
-- **unavailable (race)**: book `19:30` twice with **different** idempotency_keys → 2nd is `unavailable` (409).
-- **unavailable (availability)**: availability with `party_size` `> 12`.
-- **not_found**: modify/cancel a made‑up `confirmation_id` (or one from another tenant).
-- **unauthorized / bad_request**: omit the token / send `party_size: 0` or omit `idempotency_key`.
+The committed **`spec/openapi.json`** is the source of truth — import it into Postman or
+generate a client; flag any place it disagrees with reality.
 
-Scenarios that need server‑side injection (ask the operator, or tell us and we'll add
-a per‑request test header): **timeout, auth_error, rate_limited, unknown**. These are
-real upstream conditions the operator can force via env (`MOCK_RESERVATIONS_FAIL`,
-`MOCK_RESERVATIONS_DELAY_MS`). If self‑service for these would help you build nico's
-degrade paths, say so — we can expose a mock‑only `X-Mock-Scenario` header.
-
-## Reference: minimal Python client
-```python
-import httpx, uuid
-
-BASE = "<BASE_URL>"            # e.g. http://127.0.0.1:8080
-TOKEN = "<SWITCHBOARD_TOKEN>"  # given to you by the operator
-H = {"Authorization": f"Bearer {TOKEN}"}
-
-def availability(tenant, party_size, when, deadline_ms=1500):
-    r = httpx.post(f"{BASE}/v1/reservations/availability",
-                   headers={**H, "X-Deadline-Ms": str(deadline_ms),
-                            "X-Request-ID": uuid.uuid4().hex},
-                   json={"tenant": tenant, "party_size": party_size, "datetime": when})
-    return r.json()  # branch on body["state"]
-
-def book(tenant, name, party_size, when, idem):
-    r = httpx.post(f"{BASE}/v1/reservations/book", headers=H,
-                   json={"tenant": tenant, "name": name, "party_size": party_size,
-                         "datetime": when, "idempotency_key": idem})
-    body = r.json()
-    if body["state"] == "confirmed":
-        return body["data"]["confirmation_id"]
-    # unavailable / requires_human / timeout / auth_error / rate_limited / unknown
-    raise RuntimeError(f"not booked: {body['state']} ({body['error']})")
-```
-
-## What to deliver back to the Switchboard team
-1. A short note confirming you can run the full loop (availability → book → modify →
-   cancel) against `demo`, handling every state in the table.
-2. **A list of anything missing or awkward for nico**: endpoints you need that don't
-   exist (e.g. `GET /v1/reservations/{confirmation_id}` to look up status, or a
-   list‑my‑reservations), fields you need in the payloads, states you can't currently
-   exercise, or a request for the `X-Mock-Scenario` header.
-3. Any contract ambiguity you hit. The committed OpenAPI spec
-   (`spec/openapi.json`) is the source of truth — you can import it into Postman or
-   generate a client from it; flag any place the spec and reality disagree.
-
-Build to the contract above, prove the loop against the dummy data, and send back your
-gaps so we converge on the right endpoints before OpenTable goes live.
+## What to send back to the Switchboard team (so we build the RIGHT contract)
+1. Confirm you can run availability → book against `demo` and handle every state above.
+2. **What's missing/awkward for a voice agent:** Do you need a **GET reservation lookup**
+   (status by confirmation_id) or "list my reservations"? Do you need to send the
+   **caller's phone automatically** as `customer.phone`? Any field you need
+   (e.g. seating preference as structured data vs `notes`)? Do you want the
+   `X-Mock-Scenario` header to self-test failures? Is `date`+`time` right, or would a
+   single ISO datetime be easier for your NLU output?
+3. Any contract ambiguity. We will confirm OpenTable's real fields once partner approval
+   lands and adjust — so tell us now what nico needs and we converge before go-live.

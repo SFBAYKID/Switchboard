@@ -20,6 +20,7 @@ from tests.helpers import (
     auth_headers,
     availability_payload,
     booking_payload,
+    write_headers,
 )
 
 AVAIL = "/v1/reservations/availability"
@@ -82,7 +83,7 @@ def test_write_timeout_is_requires_human_not_retryable(monkeypatch: pytest.Monke
     with TestClient(app) as c:
         resp = c.post(
             BOOK,
-            headers={**auth_headers(), "X-Deadline-Ms": "100"},
+            headers={**write_headers("wt-1"), "X-Deadline-Ms": "100"},
             json=booking_payload(),
         )
 

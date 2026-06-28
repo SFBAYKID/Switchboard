@@ -35,12 +35,15 @@ rather than assuming it already exists. Operate ONLY within Switchboard's own fo
    never blocks.
 
 ## Internal API (v1 sketch)
-Uniform envelope on every response: `{ ok, data, error, source, latency_ms, mock }`.
-- `POST /v1/reservations/availability` `{tenant, party_size, datetime}` → `{available, slots[]}`  (real-time)
-- `POST /v1/reservations/book` `{tenant, name, party_size, datetime}` → `{confirmation_id, status}`
-- `POST /v1/reservations/modify` · `POST /v1/reservations/cancel`
-- `POST /v1/website/crawl` `{tenant, url}` → `{job_id}`  (async → returns results to the calling agent via its token)
-- `POST /v1/payments/...`  (Stripe — later)
+Uniform envelope on every response: `{ ok, state, data, error, source, latency_ms, mock, request_id }`.
+Reservations body uses `restaurant_id` + split `date`/`time`; writes require an `Idempotency-Key`
+header. Source of truth: `spec/openapi.json`. (See architecture.md "OpenTable integration —
+verification status": these are Switchboard's OWN normalized shapes; OpenTable backing is unverified.)
+- `POST /v1/reservations/availability` `{restaurant_id, date, time, party_size}` → `{state, slots[]}`  (real-time)
+- `POST /v1/reservations/book` `{restaurant_id, date, time, party_size, customer{name,phone,email?}, notes?}` + `Idempotency-Key` → `{state, confirmation_id}`
+- `POST /v1/reservations/modify` · `POST /v1/reservations/cancel`  (+ `Idempotency-Key`)
+- `POST /v1/website/crawl` `{...}` → `{job_id}`  (async — future seam, NOT built)
+- `POST /v1/payments/...`  (Stripe — later, NOT built)
 
 ## First module: reservations (OpenTable), mock-first
 - A `reservations` module with a MOCK backend returning fake availability/bookings NOW.

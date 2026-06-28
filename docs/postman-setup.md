@@ -205,8 +205,14 @@ Environments hold only what differs between targets; everything else stays in th
 |---|---|---|---|
 | `base_url` | `http://localhost:8080` | `http://localhost:8080` | _to be defined — Switchboard's own infra_ |
 | `switchboard_token` | dev token (**secret** type) | dev token (**secret** type) | prod token (**secret** type) |
-| `tenant` | `demo` | `demo` | real tenant slug |
+| `restaurant_id` | `demo` | `demo` | real restaurant slug |
 | `expect_mock` | `true` | `false` | env-dependent |
+
+> **Contract note:** the reservations body uses `restaurant_id` + split `date`/`time` (not `tenant`/
+> `datetime`), writes require an `Idempotency-Key` header, and the envelope now includes `state` +
+> `request_id`. The committed **`spec/openapi.json` is the source of truth** — regenerate the collection
+> from it (§6). The shapes are Switchboard's OWN normalization; OpenTable backing is unverified
+> (architecture.md "OpenTable integration — verification status").
 
 Notes:
 
@@ -229,7 +235,7 @@ requests. **[recommendation]**
 
 ```javascript
 // Collection-level test: validate Switchboard's uniform response envelope.
-// Envelope (charter): { ok, data, error, source, latency_ms, mock }
+// Envelope: { ok, state, data, error, source, latency_ms, mock, request_id }
 const body = pm.response.json();
 
 pm.test("envelope has required fields with correct types", () => {
@@ -238,6 +244,8 @@ pm.test("envelope has required fields with correct types", () => {
     pm.expect(body).to.have.property("source").that.is.a("string");
     pm.expect(body).to.have.property("latency_ms").that.is.a("number");
     pm.expect(body).to.have.property("mock").that.is.a("boolean");
+    pm.expect(body).to.have.property("request_id").that.is.a("string");
+    pm.expect(body).to.have.property("state"); // string on capability endpoints, null on system
     // `data` present on success, `error` present on failure — exactly one is meaningful.
     if (body.ok) {
         pm.expect(body.data, "data on success").to.not.be.undefined;

@@ -5,22 +5,23 @@ endpoint does the same disciplined sequence:
 
   1. Token gate (require_bearer_token) — 401 envelope on a bad/missing token.
   2. Validate the typed request body (FastAPI/Pydantic) — 400 envelope on bad input.
-  3. Resolve the per-tenant credential — fail CLOSED (404) on an unknown tenant.
-     (A resolution failure is gateway-level: source="gateway", mock=false.)
+  3. Resolve the restaurant's credential by `restaurant_id` — fail CLOSED (404) on an
+     unknown restaurant. (A resolution failure is gateway-level: source="gateway".)
   4. Compute the effective deadline = min(per-endpoint budget, caller X-Deadline-Ms)
      minus the safety margin (review #4), and PROPAGATE it into the backend call.
-  5. Dispatch to the configured backend under that deadline (review #3-#4): on a
-     definitive success return the typed result; otherwise a normalized outcome was
-     raised and the exception handler renders it. WRITES are dispatched with
-     `is_write=True`, so a write that times out becomes `requires_human` (ambiguous),
-     never a blindly-retryable `timeout` (review #5).
-  6. Wrap the success in the uniform envelope, carrying the normalized `state`,
-     measured `latency_ms`, the `mock` flag, and the correlation `request_id`.
+  5. Dispatch to the configured backend under that deadline. WRITES require the
+     `Idempotency-Key` header (review #5) and are dispatched with `is_write=True`, so a
+     write that times out becomes `requires_human` (ambiguous), never a retryable
+     `timeout`.
+  6. Wrap the success in the uniform envelope (normalized `state`, measured
+     `latency_ms`, `mock`, correlation `request_id`).
 
-`X-Deadline-Ms` (optional, >=1) is the caller's hard deadline in milliseconds.
-`X-Request-ID` (optional) threads correlation; it is echoed on the response.
+Headers:
+  - `Authorization: Bearer <token>`  (required) — Switchboard's internal token.
+  - `X-Deadline-Ms: <int>`           (optional) — caller's hard deadline, ms.
+  - `X-Request-ID: <id>`             (optional) — correlation id, echoed back.
+  - `Idempotency-Key: <id>`          (required on book/modify/cancel) — de-dupes retries.
 
-All four are tagged `source="reservations"`, and `mock` reflects the active backend.
 The OpenTable real backend is a seam (Rule 2); flipping `RESERVATIONS_BACKEND` to
 `opentable` changes only `mock` (true->false) for the caller.
 """
@@ -55,8 +56,8 @@ from switchboard.integrations.reservations.models import (
 
 router = APIRouter(prefix="/v1/reservations", tags=["reservations"])
 
-# The caller's optional hard deadline (ms). Shared declaration so every endpoint
-# documents it identically in the OpenAPI spec.
+# The caller's optional hard deadline (ms). Shared so every endpoint documents it
+# identically in the OpenAPI spec.
 DeadlineHeader = Header(
     default=None,
     alias="X-Deadline-Ms",
@@ -64,10 +65,18 @@ DeadlineHeader = Header(
     description=(
         "Caller's hard deadline in milliseconds. The effective deadline is "
         "min(this, the per-endpoint budget), minus a small safety margin. On exceed, "
-        "a read returns state=timeout and a write returns state=requires_human. NOTE: "
-        "a deadline at or below the gateway's safety margin (~50ms) leaves no time for "
-        "the upstream and will almost always yield a timeout/requires_human."
+        "a read returns state=timeout and a write returns state=requires_human. A "
+        "deadline at/below the safety margin (~50ms) will almost always time out."
     ),
+)
+
+# The REQUIRED idempotency key for writes (review #5). Generate one per booking intent
+# and REUSE it on every retry of that same action so a retry can't double-book.
+IdempotencyHeader = Header(
+    alias="Idempotency-Key",
+    min_length=1,
+    max_length=200,
+    description="Required on writes. A stable key per logical write; reuse on retry.",
 )
 
 
@@ -84,10 +93,10 @@ async def availability(
     settings: Settings = Depends(get_settings),
     _auth: None = Depends(require_bearer_token),
 ) -> Envelope[AvailabilityResult]:
-    """Check reservation availability (real-time; deadline-budgeted)."""
+    """Check whether the requested restaurant/date/time/party is available."""
 
     mock = is_mock(settings)
-    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.tenant)
+    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.restaurant_id)
     backend = select_backend(settings)
     timeout_ms = compute_effective_timeout_ms(
         budget_ms=settings.availability_budget_ms,
@@ -122,10 +131,11 @@ async def book(
     req: BookingRequest,
     request: Request,
     x_deadline_ms: int | None = DeadlineHeader,
+    idempotency_key: str = IdempotencyHeader,
     settings: Settings = Depends(get_settings),
     _auth: None = Depends(require_bearer_token),
 ) -> Envelope[BookingResult]:
-    """Create a booking (consequential write; idempotent; race-safe — review #5).
+    """Book the reservation (consequential write; idempotent; race-safe — review #5).
 
     Returns `ok=true` ONLY on an actual confirmation. A slot-gone race surfaces as
     `unavailable`, an ambiguous result (incl. a write timeout) as `requires_human` —
@@ -133,7 +143,7 @@ async def book(
     """
 
     mock = is_mock(settings)
-    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.tenant)
+    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.restaurant_id)
     backend = select_backend(settings)
     timeout_ms = compute_effective_timeout_ms(
         budget_ms=settings.booking_budget_ms,
@@ -141,7 +151,7 @@ async def book(
         margin_ms=settings.budget_safety_margin_ms,
     )
     result = await call_with_budget(
-        backend.book(req, cred, timeout_ms),
+        backend.book(req, cred, timeout_ms, idempotency_key),
         timeout_ms=timeout_ms,
         source=SOURCE,
         mock=mock,
@@ -169,13 +179,14 @@ async def modify(
     req: ModifyRequest,
     request: Request,
     x_deadline_ms: int | None = DeadlineHeader,
+    idempotency_key: str = IdempotencyHeader,
     settings: Settings = Depends(get_settings),
     _auth: None = Depends(require_bearer_token),
 ) -> Envelope[ModifyResult]:
     """Modify an existing booking (consequential write; idempotent)."""
 
     mock = is_mock(settings)
-    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.tenant)
+    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.restaurant_id)
     backend = select_backend(settings)
     timeout_ms = compute_effective_timeout_ms(
         budget_ms=settings.booking_budget_ms,
@@ -183,7 +194,7 @@ async def modify(
         margin_ms=settings.budget_safety_margin_ms,
     )
     result = await call_with_budget(
-        backend.modify(req, cred, timeout_ms),
+        backend.modify(req, cred, timeout_ms, idempotency_key),
         timeout_ms=timeout_ms,
         source=SOURCE,
         mock=mock,
@@ -211,13 +222,14 @@ async def cancel(
     req: CancelRequest,
     request: Request,
     x_deadline_ms: int | None = DeadlineHeader,
+    idempotency_key: str = IdempotencyHeader,
     settings: Settings = Depends(get_settings),
     _auth: None = Depends(require_bearer_token),
 ) -> Envelope[CancelResult]:
     """Cancel an existing booking (consequential write; idempotent)."""
 
     mock = is_mock(settings)
-    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.tenant)
+    cred = resolve_credential(CREDENTIAL_NAMESPACE, req.restaurant_id)
     backend = select_backend(settings)
     timeout_ms = compute_effective_timeout_ms(
         budget_ms=settings.booking_budget_ms,
@@ -225,7 +237,7 @@ async def cancel(
         margin_ms=settings.budget_safety_margin_ms,
     )
     result = await call_with_budget(
-        backend.cancel(req, cred, timeout_ms),
+        backend.cancel(req, cred, timeout_ms, idempotency_key),
         timeout_ms=timeout_ms,
         source=SOURCE,
         mock=mock,

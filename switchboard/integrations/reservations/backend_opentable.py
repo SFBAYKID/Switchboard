@@ -44,6 +44,15 @@ _NOT_IMPLEMENTED = (
     "use RESERVATIONS_BACKEND=mock."
 )
 
+# IMPORTANT (Rule 2 / Rule 6): every "when implemented..." note below is an ASSUMPTION
+# pending partner-doc verification. OpenTable's API is partner-gated and NOT publicly
+# documented (see architecture.md "OpenTable integration — verification status"), so
+# we have NOT confirmed: the endpoint paths, the auth scheme (RID + API key vs
+# client_id/OAuth), whether an idempotency header exists (and its name), whether
+# server-side create/modify/cancel exist for our partner tier at all, or which
+# guest/notes fields OpenTable accepts. Do not treat these comments as fact; confirm
+# against the real docs when approval lands, and adjust the gateway contract if needed.
+
 
 class OpenTableReservationsBackend:
     """Real OpenTable client SEAM. Implements `ReservationsBackend`; not yet built."""
@@ -62,18 +71,31 @@ class OpenTableReservationsBackend:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def book(
-        self, req: BookingRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: BookingRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> BookingResult:
-        # When implemented: forward req.idempotency_key to OpenTable's idempotency
-        # mechanism, and bound the call by deadline_ms (Rule 2 / review #4-#5).
+        # When implemented: authenticate with cred.rid + cred.api_key, forward
+        # idempotency_key to OpenTable's idempotency mechanism, map req.customer/notes
+        # to OpenTable's fields, and bound the call by deadline_ms (Rule 2 / review #4-#5).
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def modify(
-        self, req: ModifyRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: ModifyRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> ModifyResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def cancel(
-        self, req: CancelRequest, cred: ResolvedCredential, deadline_ms: int
+        self,
+        req: CancelRequest,
+        cred: ResolvedCredential,
+        deadline_ms: int,
+        idempotency_key: str,
     ) -> CancelResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)
