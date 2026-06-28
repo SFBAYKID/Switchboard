@@ -64,18 +64,31 @@ def test_book_different_key_different_confirmation(client: TestClient) -> None:
     assert one["data"]["confirmation_id"] != two["data"]["confirmation_id"]
 
 
-def test_modify_echoes_confirmation(client: TestClient) -> None:
-    body = client.post(MODIFY, headers=auth_headers(), json=modify_payload()).json()
+def test_modify_existing_reservation(client: TestClient) -> None:
+    # The stateful store requires a real reservation, so book first.
+    cid = client.post(
+        BOOK, headers=auth_headers(), json=booking_payload(idempotency_key="modify-me")
+    ).json()["data"]["confirmation_id"]
+
+    body = client.post(
+        MODIFY, headers=auth_headers(), json=modify_payload(confirmation_id=cid)
+    ).json()
     assert body["ok"] is True
     assert body["state"] == "modified"
-    assert body["data"]["confirmation_id"] == "MOCK-DEMO-ABC123"
+    assert body["data"]["confirmation_id"] == cid
 
 
-def test_cancel_echoes_confirmation(client: TestClient) -> None:
-    body = client.post(CANCEL, headers=auth_headers(), json=cancel_payload()).json()
+def test_cancel_existing_reservation(client: TestClient) -> None:
+    cid = client.post(
+        BOOK, headers=auth_headers(), json=booking_payload(idempotency_key="cancel-me")
+    ).json()["data"]["confirmation_id"]
+
+    body = client.post(
+        CANCEL, headers=auth_headers(), json=cancel_payload(confirmation_id=cid)
+    ).json()
     assert body["ok"] is True
     assert body["state"] == "cancelled"
-    assert body["data"]["confirmation_id"] == "MOCK-DEMO-ABC123"
+    assert body["data"]["confirmation_id"] == cid
 
 
 def test_write_requires_idempotency_key(client: TestClient) -> None:

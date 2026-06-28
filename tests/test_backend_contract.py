@@ -5,21 +5,24 @@ real backend diverging, so everything "works in mock" and breaks the day real
 OpenTable is wired in. mypy's structural Protocol check guards the SIGNATURES; this
 suite guards the runtime SHAPES + state vocabulary of the results.
 
-It is parametrized over backends so the real `OpenTableReservationsBackend` can be
-added to `BACKENDS` the moment it exists (against the sandbox) and must pass the
-EXACT same assertions — that is what makes the swap safe. Today only the mock is
-exercised; this is verified-on-mock, not verified-against-real (honest split).
+It is parametrized so the real `OpenTableReservationsBackend` can be added the moment
+it exists (against the sandbox) and must pass the EXACT same assertions — that is what
+makes the swap safe. Today only the mock is exercised; this is verified-on-mock, not
+verified-against-real (honest split). The autouse fixture resets the mock store before
+each test, so state from one test never leaks into another.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterator
 
 import pytest
 
 from switchboard.core.credentials import ResolvedCredential
 from switchboard.integrations.reservations.backend_mock import MockReservationsBackend
 from switchboard.integrations.reservations.interface import ReservationsBackend
+from switchboard.integrations.reservations.mock_store import get_store
 from switchboard.integrations.reservations.models import (
     AvailabilityRequest,
     AvailabilityResult,
@@ -31,18 +34,24 @@ from switchboard.integrations.reservations.models import (
     ModifyResult,
 )
 
-# Backends that must satisfy the contract. The OpenTable backend joins here once it
-# is implemented + sandbox-available (it would be exercised against the sandbox).
-BACKENDS = [pytest.param(MockReservationsBackend(), id="mock")]
-
 # A resolved credential is required by the interface; its secret value is irrelevant
-# to the mock and is never used/echoed.
-CRED = ResolvedCredential(integration="OPENTABLE", tenant="DEMO", api_key="unused")
-WHEN = dt.datetime(2026, 7, 1, 19, 0, 0)
+# to the mock and is never used/echoed. DEMO is seeded in the mock store.
+CRED = ResolvedCredential(integration="OPENTABLE", tenant="DEMO", api_key="unused", rid="r")
+WHEN = dt.datetime(2026, 7, 1, 19, 0, 0)  # a seeded slot for DEMO
 DEADLINE_MS = 1000
 
 
-@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.fixture
+def backend() -> Iterator[ReservationsBackend]:
+    """Each contract backend, freshly pointed at the (reset-between-tests) store.
+
+    Add OpenTableReservationsBackend here (sandbox) once it exists — it must pass
+    every assertion below unchanged.
+    """
+
+    yield MockReservationsBackend(get_store())
+
+
 async def test_availability_shape(backend: ReservationsBackend) -> None:
     result = await backend.availability(
         AvailabilityRequest(tenant="demo", party_size=2, datetime=WHEN), CRED, DEADLINE_MS
@@ -53,7 +62,6 @@ async def test_availability_shape(backend: ReservationsBackend) -> None:
         assert slot.party_size >= 1
 
 
-@pytest.mark.parametrize("backend", BACKENDS)
 async def test_book_shape_and_idempotency(backend: ReservationsBackend) -> None:
     req = BookingRequest(
         tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="same"
@@ -67,25 +75,41 @@ async def test_book_shape_and_idempotency(backend: ReservationsBackend) -> None:
     assert second.confirmation_id == first.confirmation_id
 
 
-@pytest.mark.parametrize("backend", BACKENDS)
 async def test_modify_shape(backend: ReservationsBackend) -> None:
+    cid = (
+        await backend.book(
+            BookingRequest(
+                tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="m"
+            ),
+            CRED,
+            DEADLINE_MS,
+        )
+    ).confirmation_id
     result = await backend.modify(
-        ModifyRequest(tenant="demo", confirmation_id="MOCK-DEMO-ABC", idempotency_key="k"),
+        ModifyRequest(tenant="demo", confirmation_id=cid, idempotency_key="m2"),
         CRED,
         DEADLINE_MS,
     )
     assert isinstance(result, ModifyResult)
     assert result.state == "modified"
-    assert result.confirmation_id == "MOCK-DEMO-ABC"
+    assert result.confirmation_id == cid
 
 
-@pytest.mark.parametrize("backend", BACKENDS)
 async def test_cancel_shape(backend: ReservationsBackend) -> None:
+    cid = (
+        await backend.book(
+            BookingRequest(
+                tenant="demo", name="Ada", party_size=2, datetime=WHEN, idempotency_key="c"
+            ),
+            CRED,
+            DEADLINE_MS,
+        )
+    ).confirmation_id
     result = await backend.cancel(
-        CancelRequest(tenant="demo", confirmation_id="MOCK-DEMO-ABC", idempotency_key="k"),
+        CancelRequest(tenant="demo", confirmation_id=cid, idempotency_key="c2"),
         CRED,
         DEADLINE_MS,
     )
     assert isinstance(result, CancelResult)
     assert result.state == "cancelled"
-    assert result.confirmation_id == "MOCK-DEMO-ABC"
+    assert result.confirmation_id == cid

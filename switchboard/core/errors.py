@@ -141,6 +141,30 @@ class TenantNotFoundError(AppError):
         super().__init__(message, source=source, mock=mock)
 
 
+class ReservationNotFoundError(AppError):
+    """The referenced reservation does not exist for this tenant (404).
+
+    Distinct from `TenantNotFoundError` (unknown tenant) but shares the `not_found`
+    contract code — both mean "the resource you referenced does not exist." Raised by
+    a stateful backend on modify/cancel of an unknown (or another tenant's)
+    reservation; tenant-scoped lookup is what enforces the isolation.
+    """
+
+    code = "not_found"
+    http_status = 404
+    retryable = False
+    state = None
+
+    def __init__(
+        self,
+        message: str = "The requested reservation was not found.",
+        *,
+        source: str = GATEWAY_SOURCE,
+        mock: bool = False,
+    ) -> None:
+        super().__init__(message, source=source, mock=mock)
+
+
 class InternalError(AppError):
     """Last-resort safety net for an unexpected fault (500).
 
