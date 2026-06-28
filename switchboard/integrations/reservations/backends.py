@@ -18,6 +18,7 @@ from switchboard.integrations.reservations.backend_opentable import (
     OpenTableReservationsBackend,
 )
 from switchboard.integrations.reservations.interface import ReservationsBackend
+from switchboard.integrations.reservations.mock_store import get_store
 
 
 def select_backend(settings: Settings) -> ReservationsBackend:
@@ -25,6 +26,7 @@ def select_backend(settings: Settings) -> ReservationsBackend:
 
     if settings.reservations_backend == "mock":
         return MockReservationsBackend(
+            get_store(settings.mock_reservations_seed_path),
             delay_ms=settings.mock_reservations_delay_ms,
             fail_mode=settings.mock_reservations_fail,
         )

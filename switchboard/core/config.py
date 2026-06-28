@@ -116,6 +116,12 @@ class Settings(BaseSettings):
         default="none",
         validation_alias="MOCK_RESERVATIONS_FAIL",
     )
+    # Path to the JSON seed for the stateful mock store. None -> bundled default
+    # (data/mock_reservations.json).
+    mock_reservations_seed_path: str | None = Field(
+        default=None,
+        validation_alias="MOCK_RESERVATIONS_SEED_PATH",
+    )
 
     @model_validator(mode="after")
     def _margin_below_budgets(self) -> "Settings":

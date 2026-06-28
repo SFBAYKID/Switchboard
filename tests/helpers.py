@@ -17,6 +17,9 @@ ENVELOPE_FIELDS: frozenset[str] = frozenset(
 TEST_TOKEN: str = "test-switchboard-token-abc123"
 DEMO_KEY: str = "demo-opentable-key-AAAAAAAA"
 ACME_KEY: str = "acme-opentable-key-BBBBBBBB"
+# Per-restaurant RIDs (identifiers, not secrets) — paired with the API keys.
+DEMO_RID: str = "rid-demo-1111"
+ACME_RID: str = "rid-acme-2222"
 
 # A fixed future datetime so tests are deterministic.
 WHEN: str = "2026-07-01T19:00:00"

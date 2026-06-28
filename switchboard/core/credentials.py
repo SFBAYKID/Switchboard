@@ -45,19 +45,31 @@ class ResolvedCredential:
     """A resolved upstream credential for one (integration, tenant).
 
     `api_key` is SECRET: never log it, never echo it into a response/error envelope.
-    `repr=False` keeps it out of accidental `repr()`/log lines (e.g. if the dataclass
-    is logged). It is passed only to the backend that performs the upstream call.
+    `repr=False` keeps it out of accidental `repr()`/log lines. It is passed only to
+    the backend that performs the upstream call.
+
+    `rid` is the upstream Restaurant ID that OpenTable pairs with the API key. It is
+    an identifier (not a secret), optional today (the mock ignores it), and present so
+    that when OpenTable access lands the real backend has both halves — go-live is
+    "set RID + key" with no shape change. It is `None` if not configured.
     """
 
     integration: str  # credential namespace, e.g. "OPENTABLE"
     tenant: str  # the resolved tenant slug (uppercased), an identifier, not a secret
     api_key: str = field(repr=False)  # SECRET — kept out of repr/logs
+    rid: str | None = None  # upstream Restaurant ID (identifier; required for real go-live)
 
 
-def _env_var_name(namespace: str, tenant: str) -> str:
-    """Build the namespaced env var name for a (namespace, tenant) credential."""
+def _api_key_var_name(namespace: str, tenant: str) -> str:
+    """Build the namespaced env var name for a (namespace, tenant) API key."""
 
     return f"SWITCHBOARD_{namespace.upper()}__{tenant.upper()}__API_KEY"
+
+
+def _rid_var_name(namespace: str, tenant: str) -> str:
+    """Build the namespaced env var name for a (namespace, tenant) Restaurant ID."""
+
+    return f"SWITCHBOARD_{namespace.upper()}__{tenant.upper()}__RID"
 
 
 def resolve_credential(
@@ -85,16 +97,19 @@ def resolve_credential(
             "The 'tenant' identifier is malformed.", source=source, mock=mock
         )
 
-    var_name = _env_var_name(namespace, tenant)
-    value = os.environ.get(var_name)
-    if not value:
+    api_key = os.environ.get(_api_key_var_name(namespace, tenant))
+    if not api_key:
         # Fail CLOSED. Generic message: never disclose which tenants are configured.
         raise TenantNotFoundError(source=source, mock=mock)
+
+    # RID is optional today (mock ignores it); the real backend will require it.
+    rid = os.environ.get(_rid_var_name(namespace, tenant)) or None
 
     return ResolvedCredential(
         integration=namespace.upper(),
         tenant=tenant.upper(),
-        api_key=value,
+        api_key=api_key,
+        rid=rid,
     )
 
 

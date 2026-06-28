@@ -1,0 +1,19 @@
+{
+  "_comment": "Seed data for the reservations MOCK backend (review: dummy data lives in a JSON file). Edit freely. Tenant keys are UPPERCASE (they match the resolved credential's tenant). Each slot has a capacity; a booking consumes one unit, so availability reflects bookings and the availability!=booked race can be exercised naturally (see the capacity-1 slot). Switchboard itself stays stateless — this is the MOCK standing in for OpenTable's state, and it resets to this seed on restart.",
+  "tenants": {
+    "DEMO": {
+      "slots": [
+        { "time": "2026-07-01T19:00:00", "capacity": 10 },
+        { "time": "2026-07-01T19:30:00", "capacity": 1 },
+        { "time": "2026-07-01T20:00:00", "capacity": 5 }
+      ]
+    },
+    "ACME": {
+      "slots": [
+        { "time": "2026-07-01T19:00:00", "capacity": 10 },
+        { "time": "2026-07-01T19:30:00", "capacity": 1 },
+        { "time": "2026-07-01T20:00:00", "capacity": 5 }
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ from switchboard.core.errors import TenantNotFoundError
 from tests.helpers import (
     ACME_KEY,
     DEMO_KEY,
+    DEMO_RID,
     auth_headers,
     availability_payload,
     booking_payload,
@@ -25,6 +26,12 @@ def test_resolver_returns_distinct_per_tenant() -> None:
     assert demo.api_key == DEMO_KEY
     assert acme.api_key == ACME_KEY
     assert demo.api_key != acme.api_key  # no cross-bleed
+
+
+def test_resolver_returns_rid_paired_with_key() -> None:
+    # The RID is resolved alongside the API key so go-live is "set RID + key".
+    demo = resolve_credential("OPENTABLE", "demo", source="reservations", mock=True)
+    assert demo.rid == DEMO_RID
 
 
 def test_unknown_tenant_fails_closed() -> None:
