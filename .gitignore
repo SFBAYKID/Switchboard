@@ -1,0 +1,46 @@
+# ── Switchboard .gitignore ────────────────────────────────────────────────────
+# Switchboard is a standalone project; this list keeps secrets, local state, and
+# build junk out of git. NEVER commit secrets (CLAUDE.md Rules 7 & 11) — staging is
+# always `git add <path>`, never `git add -A`/`.`.
+
+# Secrets — Switchboard's OWN .env holds the bearer token + per-tenant upstream
+# credentials. It must never be committed. The value-free .env.example IS committed.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenv (Switchboard's own; recreated from pyproject — not source)
+.venv/
+venv/
+env/
+
+# Postman / Newman build artifacts (the committed source of truth is spec/openapi.json)
+build/switchboard.postman_collection.json
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local (personal) settings — keep .claude/agents/ tracked, this file not
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
